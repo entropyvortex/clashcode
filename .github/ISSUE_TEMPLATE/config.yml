@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussion
+    url: https://github.com/entropyvortex/clashcode/discussions
+    about: For usage questions, design conversations, and show-and-tell.
+  - name: Security vulnerabilities
+    url: https://github.com/entropyvortex/clashcode/security/advisories/new
+    about: Please report security issues privately via GitHub Security Advisories.

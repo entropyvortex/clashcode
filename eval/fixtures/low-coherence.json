@@ -1,0 +1,54 @@
+{
+  "topic": "Should we rewrite our frontend in Svelte?",
+  "rounds": 4,
+  "entries": [
+    {
+      "persona": "pragmatist",
+      "round": 1,
+      "phase": "initial-analysis",
+      "content": "Frameworks come and go. Focus on shipping features."
+    },
+    {
+      "persona": "elegance-purist",
+      "round": 1,
+      "phase": "initial-analysis",
+      "content": "Svelte has beautiful reactivity primitives. The syntax is clean."
+    },
+    {
+      "persona": "pragmatist",
+      "round": 2,
+      "phase": "counterarguments",
+      "content": "The team knows React. Retraining costs time."
+    },
+    {
+      "persona": "elegance-purist",
+      "round": 2,
+      "phase": "counterarguments",
+      "content": "Developer happiness matters long-term. Technical debt compounds."
+    },
+    {
+      "persona": "pragmatist",
+      "round": 3,
+      "phase": "evidence-assessment",
+      "content": "Hiring pool for React is larger."
+    },
+    {
+      "persona": "elegance-purist",
+      "round": 3,
+      "phase": "evidence-assessment",
+      "content": "Bundle sizes are typically smaller with Svelte, which helps perceived performance."
+    },
+    {
+      "persona": "pragmatist",
+      "round": 4,
+      "phase": "synthesis",
+      "content": "Maintain React. Shipping matters most."
+    },
+    {
+      "persona": "elegance-purist",
+      "round": 4,
+      "phase": "synthesis",
+      "content": "Adopt Svelte for new greenfield projects. Developer experience is the priority."
+    }
+  ]
+}

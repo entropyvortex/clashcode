@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest an enhancement or new capability.
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the user pain or gap this addresses. Concrete scenarios help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the ideal UX / API look like? Sketches, commands, or pseudocode welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, and why they fall short.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Area
+      options:
+        - CLI / UX
+        - Multi-agent orchestration
+        - Consensus / debate engine
+        - Sandbox backends
+        - Configuration / init
+        - Telemetry / observability
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I've searched existing issues and discussions
+        - label: I'd be willing to help implement this

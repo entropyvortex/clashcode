@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.clashcode/settings.json
+.clashcode/sessions/
+.clashcode/cache/
+coverage/
+.DS_Store
+**/.DS_Store
+Thumbs.db

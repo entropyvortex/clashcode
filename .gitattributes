@@ -1,0 +1,24 @@
+# Normalize line endings to LF on checkout across all platforms.
+# Prevents Windows CRLF conversion from failing `prettier --check` in CI.
+* text=auto eol=lf
+
+# Explicit LF for source / config / docs
+*.ts        text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+.prettierrc text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# Binaries — never touch
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary

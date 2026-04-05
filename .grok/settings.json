@@ -1,0 +1,6 @@
+{
+  "sandboxMode": "off",
+  "sandbox": {
+    "allowNet": true
+  }
+}
