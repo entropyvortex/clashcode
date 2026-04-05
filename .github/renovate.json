@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "timezone": "America/Sao_Paulo",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Auto-merge non-major devDependency updates after CI passes",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group TypeScript/ESLint toolchain updates",
+      "matchPackageNames": [
+        "typescript",
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/parser",
+        "eslint",
+        "eslint-config-prettier",
+        "@eslint/js"
+      ],
+      "groupName": "typescript toolchain"
+    },
+    {
+      "description": "Group vitest updates",
+      "matchPackageNames": ["vitest", "@vitest/coverage-v8"],
+      "groupName": "vitest"
+    },
+    {
+      "description": "Hold back major upgrades for manual review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["major-upgrade", "needs-review"]
+    },
+    {
+      "description": "Pin @jackchen_me/open-multi-agent — framework drift is breaking-risk",
+      "matchPackageNames": ["@jackchen_me/open-multi-agent"],
+      "automerge": false,
+      "addLabels": ["framework-upgrade", "needs-review"]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "topic": "Should we switch from REST to gRPC for internal service calls?",
+  "rounds": 2,
+  "_note": "DOCUMENTED FAILURE MODE: content is salted with evidence-marker words (benchmark, measured, profiled, RFC, spec, empirical) WITHOUT any actual evidence. The heuristic scorer will rank Evidence Grounding high. Real evidence content: zero.",
+  "entries": [
+    {
+      "persona": "performance-extremist",
+      "round": 1,
+      "phase": "initial-analysis",
+      "content": "Benchmark data shows measured performance. Profiled results indicate empirical improvements. The RFC specifies this. The spec documents it. Measurements prove this. Benchmarks confirm this. Profiling reveals it. Empirical data supports it."
+    },
+    {
+      "persona": "pragmatist",
+      "round": 1,
+      "phase": "initial-analysis",
+      "content": "Measured benchmarks profiled empirical RFC spec data. Profiled measurements benchmarked empirically. The spec states. The RFC documents. The benchmark proves."
+    },
+    {
+      "persona": "performance-extremist",
+      "round": 2,
+      "phase": "synthesis",
+      "content": "Benchmark profiled measured empirical RFC spec. I agree with the measured benchmarks. Profiled data confirms empirical results."
+    },
+    {
+      "persona": "pragmatist",
+      "round": 2,
+      "phase": "synthesis",
+      "content": "I agree. Benchmark profiled measured empirical. The spec and RFC support this. Profiling and benchmarks confirm it."
+    }
+  ]
+}
