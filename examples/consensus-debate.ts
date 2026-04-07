@@ -1,7 +1,7 @@
 /**
  * consensus-debate.ts — run a multi-persona debate programmatically.
  *
- * Runs ClashEngine.runDebate with 3 personas × 2 rounds on a topic
+ * Runs ClashEngine.executeClashDebate with 3 personas × 2 rounds on a topic
  * passed as argv[2]. Prints the structured report at the end.
  *
  * ⚠ This calls the real LLM provider and will cost tokens.
@@ -12,7 +12,12 @@
  *   pnpm tsx examples/consensus-debate.ts "Should we adopt Rust?"
  */
 
-import { ClashEngine, BUILT_IN_PERSONAS, createOrchestrator, resolveApiKey } from '../src/index.js'
+import {
+  createOrchestrator,
+  formatDebateReport,
+  BUILT_IN_PERSONAS,
+  resolveApiKey,
+} from '../src/index.js'
 
 async function main(): Promise<void> {
   const topic = process.argv[2] ?? 'Should we prefer SQL over NoSQL for a new social network?'
@@ -27,23 +32,19 @@ async function main(): Promise<void> {
   console.log('Personas available:', Object.keys(BUILT_IN_PERSONAS).join(', '))
   console.log()
 
-  const { orchestrator } = createOrchestrator({
+  const { engine } = createOrchestrator({
     defaultModel: 'grok-4',
-    defaultProvider: 'grok',
+    defaultProvider: 'xai',
     defaultApiKey: apiKey,
   })
-  const engine = new ClashEngine('grok-4', 'grok')
 
-  const result = await engine.runDebate(
-    {
-      topic,
-      rounds: 2,
-      personas: ['pragmatist', 'elegance-purist', 'security-maximalist'],
-    },
-    orchestrator,
-  )
+  const result = await engine.executeClashDebate({
+    topic,
+    rounds: 2,
+    personas: ['pragmatist', 'elegance-purist', 'security-maximalist'],
+  })
 
-  console.log('\n' + engine.formatReport(result))
+  console.log('\n' + formatDebateReport(result))
 }
 
 main().catch((err) => {

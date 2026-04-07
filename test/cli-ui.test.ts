@@ -1,7 +1,7 @@
 /**
  * Unit tests for src/cli/ui.ts — ANSI helpers, Spinner, box, formatResponse.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 import {
   c,
   VERSION,
@@ -44,7 +44,8 @@ describe('banner', () => {
 })
 
 describe('Spinner', () => {
-  let stderrSpy: ReturnType<typeof vi.spyOn>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stderrSpy: MockInstance<(...args: any[]) => any>
 
   beforeEach(() => {
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)

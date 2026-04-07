@@ -6,7 +6,7 @@
  * freezeCoordinationView) in non-interactive mode where output goes to
  * stderr as line logs.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 
 // Force non-interactive mode so no ANSI cursor control happens.
 process.env['CLASHCODE_NO_TUI'] = '1'
@@ -21,7 +21,8 @@ import {
 } from '../src/cli/coordination-view.js'
 
 describe('coordination-view (non-interactive)', () => {
-  let stderrSpy: ReturnType<typeof vi.spyOn>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stderrSpy: MockInstance<(...args: any[]) => any>
 
   beforeEach(() => {
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)

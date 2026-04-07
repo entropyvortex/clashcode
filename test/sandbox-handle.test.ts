@@ -9,9 +9,6 @@ vi.mock('../src/sandbox/backends/shuru-bootstrap.js', () => ({
   ensureBootstrapCheckpoint: vi.fn().mockResolvedValue(undefined),
 }))
 
-// Mock ToolUseContext for execute() calls
-const mockCtx = { agent: { name: 'test', model: 'test' } } as any
-
 vi.mock('../src/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -262,7 +259,7 @@ describe('createSandboxTools — tool definitions', () => {
 
     const handle = new SandboxHandle()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxExecTool.execute({ command: 'echo hello world' }, mockCtx)
+    const result = await tools.sandboxExecTool.execute({ command: 'echo hello world' })
 
     expect(result.data).toContain('hello world')
     expect(result.isError).toBeUndefined()
@@ -276,7 +273,7 @@ describe('createSandboxTools — tool definitions', () => {
 
     const handle = new SandboxHandle()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxExecTool.execute({ command: 'cmd' }, mockCtx)
+    const result = await tools.sandboxExecTool.execute({ command: 'cmd' })
 
     expect(result.data).toContain('out')
     expect(result.data).toContain('err')
@@ -290,7 +287,7 @@ describe('createSandboxTools — tool definitions', () => {
 
     const handle = new SandboxHandle()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxExecTool.execute({ command: 'true' }, mockCtx)
+    const result = await tools.sandboxExecTool.execute({ command: 'true' })
 
     expect(result.data).toBe('(no output)')
   })
@@ -306,7 +303,7 @@ describe('createSandboxTools — tool definitions', () => {
     await handle.get()
 
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxExecTool.execute({ command: 'fail' }, mockCtx)
+    const result = await tools.sandboxExecTool.execute({ command: 'fail' })
 
     expect(result.isError).toBe(true)
     expect(result.data).toContain('container died')
@@ -318,13 +315,10 @@ describe('createSandboxTools — tool definitions', () => {
 
     const handle = new SandboxHandle()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxWriteTool.execute(
-      {
-        path: '/workspace/test.txt',
-        content: 'hello',
-      },
-      mockCtx,
-    )
+    const result = await tools.sandboxWriteTool.execute({
+      path: '/workspace/test.txt',
+      content: 'hello',
+    })
 
     expect(result.data).toContain('5 bytes')
     expect(result.data).toContain('/workspace/test.txt')
@@ -339,13 +333,10 @@ describe('createSandboxTools — tool definitions', () => {
     const handle = new SandboxHandle()
     await handle.get()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxWriteTool.execute(
-      {
-        path: '/tmp/x',
-        content: 'data',
-      },
-      mockCtx,
-    )
+    const result = await tools.sandboxWriteTool.execute({
+      path: '/tmp/x',
+      content: 'data',
+    })
 
     expect(result.isError).toBe(true)
     expect(result.data).toContain('write failed')
@@ -359,7 +350,7 @@ describe('createSandboxTools — tool definitions', () => {
 
     const handle = new SandboxHandle()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxReadTool.execute({ path: '/workspace/file.txt' }, mockCtx)
+    const result = await tools.sandboxReadTool.execute({ path: '/workspace/file.txt' })
 
     expect(result.data).toBe('the file contents')
   })
@@ -373,7 +364,7 @@ describe('createSandboxTools — tool definitions', () => {
     const handle = new SandboxHandle()
     await handle.get()
     const tools = createSandboxTools(handle)
-    const result = await tools.sandboxReadTool.execute({ path: '/tmp/nope' }, mockCtx)
+    const result = await tools.sandboxReadTool.execute({ path: '/tmp/nope' })
 
     expect(result.isError).toBe(true)
     expect(result.data).toContain('no such file')
