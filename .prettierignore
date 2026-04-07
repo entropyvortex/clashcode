@@ -2,5 +2,6 @@ dist/
 node_modules/
 coverage/
 .clashcode/
+.claude/
 pnpm-lock.yaml
 *.md

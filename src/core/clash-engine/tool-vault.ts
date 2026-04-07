@@ -74,9 +74,7 @@ export class ToolVault {
   }
 
   /** Get OpenAI-format tool definitions for a set of tool names. */
-  toOpenAIFormat(
-    names?: string[],
-  ): Array<{
+  toOpenAIFormat(names?: string[]): Array<{
     type: 'function'
     function: { name: string; description: string; parameters: Record<string, unknown> }
   }> {
