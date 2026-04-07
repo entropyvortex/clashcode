@@ -72,9 +72,45 @@ export class Spinner {
   }
 }
 
-/** Format an assistant response with a left-border. */
+/**
+ * Markdown renderer for terminal output.
+ *
+ * Loaded eagerly via `initMarkdownRenderer()` (called during bootstrap).
+ * Falls back to plain text if `marked` / `marked-terminal` aren't available.
+ */
+let renderMarkdown: ((text: string) => string) | null = null
+
+/**
+ * Initialize the Markdown renderer. Call once during CLI bootstrap.
+ * Safe to call multiple times (idempotent). Non-blocking — if deps
+ * are missing, silently falls back to plain rendering.
+ */
+export async function initMarkdownRenderer(): Promise<void> {
+  if (renderMarkdown) return
+  try {
+    const { Marked } = await import('marked')
+    const mod = await import('marked-terminal')
+    const TerminalRenderer = mod.default ?? mod
+    const marked = new Marked(TerminalRenderer as never)
+    renderMarkdown = (text: string) => {
+      const result = marked.parse(text)
+      return typeof result === 'string' ? result.trimEnd() : text
+    }
+  } catch {
+    // Dependencies not available — plain rendering
+  }
+}
+
+/**
+ * Format an assistant response with Markdown rendering.
+ *
+ * When initialized, renders headings, **bold**, *italic*, `code`,
+ * fenced code blocks, lists, and tables as styled ANSI terminal text.
+ * Each line is prefixed with a dim `│` border.
+ */
 export function formatResponse(text: string): string {
-  const lines = text.split('\n')
+  const rendered = renderMarkdown ? renderMarkdown(text) : text
+  const lines = rendered.split('\n')
   const formatted = lines.map((l) => `${c.dim}│${c.reset} ${l}`).join('\n')
   return `\n${formatted}\n`
 }

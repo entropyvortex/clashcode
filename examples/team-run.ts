@@ -1,11 +1,10 @@
 /**
- * team-run.ts — run a multi-agent team via the orchestrator.
+ * team-run.ts — run a multi-agent team via ClashEngine.
  *
- * Uses coder + reviewer + consensus agents via
- * @jackchen_me/open-multi-agent. The coordinator synthesises the
- * final answer.
+ * Uses coder + reviewer + consensus agents via ClashCode's own
+ * orchestrator. The coordinator synthesises the final answer.
  *
- * ⚠ This calls the real LLM provider and will cost tokens.
+ * This calls the real LLM provider and will cost tokens.
  *
  * Requires: XAI_API_KEY (or another provider key).
  *
@@ -25,7 +24,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
 
-  const { orchestrator } = createOrchestrator({
+  const { engine } = createOrchestrator({
     defaultModel: 'grok-4',
     defaultProvider: 'grok',
     defaultApiKey: apiKey,
@@ -36,10 +35,9 @@ async function main(): Promise<void> {
   })
 
   const teamConfig = defaultTeamConfig('grok-4')
-  const team = orchestrator.createTeam(teamConfig.name, teamConfig)
   console.log(`\nTask: ${task}\n`)
 
-  const result = await orchestrator.runTeam(team, task)
+  const result = await engine.executeSquad(teamConfig, task)
 
   const output =
     result.agentResults.get('coordinator')?.output ??

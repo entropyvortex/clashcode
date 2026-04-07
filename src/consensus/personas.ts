@@ -1,4 +1,4 @@
-import type { Persona } from './types.js'
+import type { Persona, PersonaRegistry } from './types.js'
 
 /** Built-in debate personas for multi-perspective analysis. */
 export const BUILT_IN_PERSONAS: Record<string, Persona> = {
@@ -71,4 +71,84 @@ export function listPersonas(): string[] {
 /** Get a persona by name. Returns undefined if not found. */
 export function getPersona(name: string): Persona | undefined {
   return BUILT_IN_PERSONAS[name]
+}
+
+// ── Pluggable PersonaRegistry implementations (v1.3) ────────────
+
+/**
+ * Default persona registry backed by the built-in personas map.
+ */
+export class BuiltInPersonaRegistry implements PersonaRegistry {
+  list(): string[] {
+    return Object.keys(BUILT_IN_PERSONAS)
+  }
+  get(name: string): Persona | undefined {
+    return BUILT_IN_PERSONAS[name]
+  }
+  getAll(): Record<string, Persona> {
+    return { ...BUILT_IN_PERSONAS }
+  }
+}
+
+/**
+ * Composite persona registry that merges multiple registries.
+ * Later registries override earlier ones on name collision.
+ */
+export class CompositePersonaRegistry implements PersonaRegistry {
+  private registries: PersonaRegistry[]
+
+  constructor(registries: PersonaRegistry[]) {
+    this.registries = registries
+  }
+
+  list(): string[] {
+    const names = new Set<string>()
+    for (const r of this.registries) {
+      for (const name of r.list()) names.add(name)
+    }
+    return [...names]
+  }
+
+  get(name: string): Persona | undefined {
+    // Search in reverse order so later registries win
+    for (let i = this.registries.length - 1; i >= 0; i--) {
+      const p = this.registries[i]!.get(name)
+      if (p) return p
+    }
+    return undefined
+  }
+
+  getAll(): Record<string, Persona> {
+    const all: Record<string, Persona> = {}
+    for (const r of this.registries) {
+      Object.assign(all, r.getAll())
+    }
+    return all
+  }
+}
+
+/**
+ * Config-file persona registry. Accepts an array of persona definitions
+ * (e.g. loaded from `.clashcode/personas.json`).
+ */
+export class ConfigPersonaRegistry implements PersonaRegistry {
+  private personas: Record<string, Persona> = {}
+
+  constructor(personas: Persona[]) {
+    for (const p of personas) {
+      this.personas[p.name] = p
+    }
+  }
+
+  list(): string[] {
+    return Object.keys(this.personas)
+  }
+
+  get(name: string): Persona | undefined {
+    return this.personas[name]
+  }
+
+  getAll(): Record<string, Persona> {
+    return { ...this.personas }
+  }
 }

@@ -119,6 +119,27 @@ let timer: ReturnType<typeof setInterval> | null = null
 let lineCount = 0
 
 /**
+ * Programmatic TUI disable flag. Set to `true` before the first
+ * `showCoordinationView()` call to force line-log mode regardless
+ * of terminal state. Useful when embedding clashcode as a library
+ * or running in environments where ANSI cursor control is unsafe.
+ *
+ * Once set, cannot be un-set for the lifetime of the process
+ * (defensive — avoids mid-render mode switches).
+ */
+let ttuiDisabled = false
+
+/** Programmatically disable the animated TUI. Irreversible. */
+export function disableTUI(): void {
+  ttuiDisabled = true
+}
+
+/** Check whether the TUI is currently disabled. */
+export function isTUIDisabled(): boolean {
+  return ttuiDisabled || !INTERACTIVE
+}
+
+/**
  * True when stderr is an interactive TTY and NO_COLOR/CI overrides are
  * not set. Drives the animated ANSI view vs the line-log fallback.
  *
@@ -175,7 +196,7 @@ export function showCoordinationView(task: string, agents?: AgentStatus[]): void
     consensus: null,
   }
 
-  if (INTERACTIVE) {
+  if (INTERACTIVE && !ttuiDisabled) {
     process.stderr.write('\x1b[?25l') // hide cursor
     render()
     timer = setInterval(() => {
@@ -320,7 +341,7 @@ export function clearCoordinationView(): void {
     clearInterval(timer)
     timer = null
   }
-  if (INTERACTIVE) {
+  if (INTERACTIVE && !ttuiDisabled) {
     if (lineCount > 0) {
       process.stderr.write(`\x1b[${lineCount}A`)
       for (let i = 0; i < lineCount; i++) process.stderr.write('\x1b[2K\n')
@@ -354,7 +375,7 @@ export function freezeCoordinationView(): void {
     }
     render()
   }
-  if (INTERACTIVE) process.stderr.write('\x1b[?25h')
+  if (INTERACTIVE && !ttuiDisabled) process.stderr.write('\x1b[?25h')
   state = null
   lineCount = 0
 }
@@ -362,7 +383,7 @@ export function freezeCoordinationView(): void {
 // ── Rendering ───────────────────────────────────────────────
 
 function render(): void {
-  if (!state || !INTERACTIVE) return
+  if (!state || !INTERACTIVE || ttuiDisabled) return
 
   const W = Math.min(process.stderr.columns || 80, 80)
   const IW = W - 4 // inner width between the two │ chars
@@ -528,7 +549,7 @@ function pushEvent(s: ViewState, msg: string): void {
   if (s.events.length > MAX_EVENTS) s.events.shift()
   // In non-interactive mode, stream events to stderr line-by-line so
   // piped logs / CI output see progress.
-  if (!INTERACTIVE) {
+  if (!INTERACTIVE || ttuiDisabled) {
     process.stderr.write(`[clashcode] ${msg}\n`)
   }
 }

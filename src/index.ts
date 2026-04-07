@@ -2,18 +2,38 @@
  * Public API for programmatic ClashCode usage.
  *
  * ```ts
- * import { createOrchestrator, ClashEngine, BUILT_IN_PERSONAS } from 'clashcode'
+ * import { ClashEngine, BUILT_IN_PERSONAS } from 'clashcode'
  * ```
  *
- * Most users interact with ClashCode through the CLI (`clashcode`). This
- * module exposes the underlying building blocks for integration into other
- * tools: orchestrator construction, sandbox backends, debate engine, and
- * session / debate persistence.
+ * v1.3: The external @jackchen_me/open-multi-agent dependency has been
+ * replaced by ClashEngine, a purpose-built orchestrator for better
+ * security, control, and TUI experience.
  *
  * @module clashcode
  */
 
-// Orchestrator + providers
+// ClashEngine core (new v1.3 orchestrator)
+export { ClashEngine } from './core/clash-engine/index.js'
+export type { ClashEngineDebateOptions } from './core/clash-engine/index.js'
+export { SignalBus, Arena, ToolVault, defineTool } from './core/clash-engine/index.js'
+export type {
+  AgentSpec,
+  AgentConfig,
+  TeamConfig,
+  SquadBlueprint,
+  AgentOutcome,
+  SquadOutcome,
+  ArenaEvent,
+  ArenaEventKind,
+  OrchestratorEvent,
+  EngineConfig,
+  ToolDef,
+  ToolResult,
+  WorkflowMode,
+  ClashSessionState,
+} from './core/clash-engine/index.js'
+
+// Orchestrator adapter (backward-compatible names)
 export {
   createOrchestrator,
   CODER_AGENT,
@@ -25,7 +45,17 @@ export {
 export type { ClashcodeConfig, ClashProvider } from './orchestrator/index.js'
 
 // Consensus / debate engine
-export { ClashEngine, BUILT_IN_PERSONAS, listPersonas, getPersona } from './consensus/index.js'
+export {
+  LexicalConvergenceScorer,
+  formatDebateReport,
+  DebateEngine,
+  BUILT_IN_PERSONAS,
+  listPersonas,
+  getPersona,
+  BuiltInPersonaRegistry,
+  CompositePersonaRegistry,
+  ConfigPersonaRegistry,
+} from './consensus/index.js'
 export type {
   Persona,
   RoundEntry,
@@ -33,8 +63,14 @@ export type {
   DebateConfig,
   DebateResult,
   ConvergenceHeuristic,
+  ConvergenceScorer,
+  PersonaRegistry,
   ConsensusEvent,
+  ClashEngineOptions,
 } from './consensus/index.js'
+
+// Sandbox tools + lifecycle
+export { SandboxHandle } from './orchestrator/tools.js'
 
 // Sandbox backends
 export { createSandboxBackend, resolveBackend } from './sandbox/factory.js'

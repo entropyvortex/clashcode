@@ -21,72 +21,139 @@ For release / contribution mechanics, see [CONTRIBUTING.md](CONTRIBUTING.md).
     │  (runtime.ts)│      │  (slash cmds)   │    │ view.ts          │
     └──┬───────────┘      └─────────────────┘    └────────▲─────────┘
        │                                                  │
-       │ each user turn                                   │ view events
+       │ each user turn                                   │ ArenaEvents
        ▼                                                  │
     ┌──────────────┐       ┌──────────────────┐           │
-    │  turn.ts     │──────▶│  orchestrator    │───────────┘
-    │  (solo/team) │       │  (open-multi-    │
-    │              │       │   agent)         │
+    │  turn.ts     │──────▶│  ClashEngine     │───────────┘
+    │  (solo/team) │       │  (src/core/      │
+    │              │       │   clash-engine/)  │
     └──┬───────────┘       └──────┬───────────┘
        │                          │
        │                          │ tool calls
        ▼                          ▼
     ┌──────────────┐       ┌──────────────────┐
-    │ team-cache   │       │ sandbox factory  │
-    │ (SQLite)     │       │ docker | shuru | │
+    │ team-cache   │       │ SandboxHandle    │
+    │ (SHA256-key) │       │ docker | shuru | │
     └──────────────┘       │ local            │
                            └──────────────────┘
 ```
 
-Every arrow is a synchronous or async function call — nothing is event-bus
-/ pub-sub. The only shared mutable state is the sandbox factory singleton
-(configured once at startup) and the terminal stream that the coordination
-view draws on.
+v1.3: The external `@jackchen_me/open-multi-agent` dependency has been
+replaced by **ClashEngine**, a purpose-built orchestrator owned by ClashCode.
+All inter-agent communication flows through the **SignalBus** event system,
+enabling real-time TUI visualization of every agent action.
 
 ---
 
-## 2. Module map
+## 2. ClashEngine — Event-Driven Orchestration Core
+
+ClashEngine lives in `src/core/clash-engine/` and is the single orchestration
+layer for both team collaboration and structured debate.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────┐
+│ ClashEngine (clash-engine.ts)                       │
+│   Public facade: executeAgent, executeSquad,        │
+│   executeClashDebate, onEvent, registerTool         │
+├────────────────────────────────────────────────────┤
+│ Arena (execution-context.ts)                        │
+│   Owns: model, provider, apiKey, SignalBus,         │
+│   ToolVault. No globals — one Arena per session.    │
+├────────┬───────────────┬───────────────────────────┤
+│ Signal │  ToolVault    │  LLM Client               │
+│ Bus    │  (tool-       │  (llm-client.ts)           │
+│ (event │  vault.ts)    │  Raw fetch to OpenAI-      │
+│ -bus.  │  Built-in +   │  compatible endpoints.     │
+│ ts)    │  sandbox      │  No external SDK.          │
+│        │  tools.       │                            │
+├────────┴───────────────┴───────────────────────────┤
+│ Runners                                             │
+│  ForgeRunner (team-runner.ts)  — 3-role squad      │
+│  ClashRunner (debate-runner.ts) — 6-persona debate │
+└────────────────────────────────────────────────────┘
+```
+
+### Key Files
+
+| File | LOC | Responsibility |
+|---|---:|---|
+| `types.ts` | ~150 | All type definitions: AgentSpec, SquadBlueprint, ArenaEvent, ToolDef |
+| `event-bus.ts` | ~90 | SignalBus: typed pub/sub with legacy bridge for backward compat |
+| `execution-context.ts` | ~100 | Arena: resolved config, provider mapping, env key lookup |
+| `agent-registry.ts` | ~75 | CODER/REVIEWER/CONSENSUS presets, defaultSquadBlueprint |
+| `tool-vault.ts` | ~170 | ToolVault registry, defineTool, built-in tools (bash, file ops, grep) |
+| `llm-client.ts` | ~120 | callModel: raw fetch to OpenAI-compatible chat/completions |
+| `team-runner.ts` | ~140 | runSpark (single agent loop), runSquad (multi-agent + coordinator) |
+| `debate-runner.ts` | ~180 | runClashDebate: 5-phase debate with rich event emission |
+| `clash-engine.ts` | ~100 | Public facade class |
+
+### Event-Driven Design
+
+Every meaningful action emits a rich `ArenaEvent` through the SignalBus:
+
+| Event Kind | Emitted When |
+|---|---|
+| `spark_ignited` | Agent starts processing |
+| `spark_completed` | Agent finishes (includes token usage) |
+| `tool_invoked` | Tool call initiated |
+| `tool_resolved` | Tool call completed (includes elapsed time) |
+| `round_opened` | Debate round begins |
+| `convergence_probed` | Convergence score computed |
+| `phase_shifted` | Workflow phase transition |
+| `fault_recovered` | Error handled gracefully |
+| `session_sealed` | Run complete |
+
+The SignalBus includes a **legacy bridge** that auto-converts ArenaEvents
+to the old `ViewEvent` format consumed by `coordination-view.ts`, ensuring
+backward compatibility with the existing TUI.
+
+### No Globals
+
+The Arena owns all runtime state (model, API key, tools, signal bus).
+There are no module-level singletons in the engine. This makes concurrent
+sessions safe and testing trivial — construct a fresh ClashEngine per test.
+
+---
+
+## 2b. Module map
 
 ### Entrypoint & CLI (`src/cli/`)
 
 | File | Lines | Responsibility |
 |---|---:|---|
 | `index.ts` | ~100 | Entrypoint. `init` subcommand short-circuit; otherwise `parse → bootstrap → build → repl`. |
-| `bootstrap.ts` | ~170 | Arg parsing, log-level, telemetry exporters, global error handlers, `--help` / `--version`. Pure functions; no I/O beyond logging. |
-| `runtime.ts` | ~160 | Builds the `Runtime` aggregate: settings, session store, team cache, orchestrator, consensus engine, sandbox configuration. One-shot, side-effectful. |
-| `repl.ts` | ~145 | Readline loop, paste detection, slash-command routing, graceful shutdown (Ctrl+C / SIGTERM / EOF). |
-| `turn.ts` | ~230 | Per-turn execution: solo vs team, cache probe, coordinator-model override, diagnostics panel. The hot path. |
-| `commands.ts` | ~710 | Slash-command registry (declarative `COMMAND_REGISTRY` map + handlers). Adding a command = one entry + one handler. |
-| `coordination-view.ts` | ~535 | Live mission-control view rendered to stderr. TTY-aware; falls back to line-logging in pipes / CI. |
-| `completer.ts` | ~120 | Readline tab-completion. Pulls command names from `commands.ts`, arguments from dynamic context. |
-| `model-select.ts` | ~135 | `/model` menu — fetches model list from provider API, renders paginated picker. |
+| `bootstrap.ts` | ~170 | Arg parsing, log-level, telemetry exporters, global error handlers, `--help` / `--version`. |
+| `runtime.ts` | ~160 | Builds the `Runtime` aggregate: settings, session store, team cache, ClashEngine, sandbox handle. |
+| `repl.ts` | ~145 | Readline loop, paste detection, slash-command routing, graceful shutdown. |
+| `turn.ts` | ~230 | Per-turn execution: solo vs team, cache probe, diagnostics panel. |
+| `commands.ts` | ~710 | Slash-command registry (declarative `COMMAND_REGISTRY` map + handlers). |
+| `coordination-view.ts` | ~555 | Live mission-control view rendered to stderr. TTY-aware fallback. |
+| `completer.ts` | ~120 | Readline tab-completion. |
+| `model-select.ts` | ~135 | `/model` menu — fetches model list from provider API. |
 | `init-interactive.ts` | ~220 | `clashcode init --interactive` wizard. |
-| `doctor.ts` | ~185 | `/doctor` and `clashcode --doctor` diagnostics. |
+| `doctor.ts` | ~185 | `/doctor` diagnostics. |
 | `ui.ts` | ~110 | ANSI colours, `banner`, `box`, `error`/`success`/`info` helpers. |
 
 ### Core services (`src/`)
 
 | Path | Responsibility |
 |---|---|
-| `config/index.ts` | Settings load/save, migration, `DEFAULT_SETTINGS`. Schema is versioned via `CURRENT_CONFIG_VERSION`. |
-| `config/keychain.ts` | `keytar`-backed API-key storage + `resolveApiKey(provider, envVar, settings)` precedence: **keychain → env → settings.json**. |
-| `state/index.ts` | `SessionStore` — SQLite + JSONL session persistence. |
-| `state/team-cache.ts` | `TeamCache` — keyed on `(goal + agents + model)` hash; TTL-based pruning. |
-| `orchestrator/index.ts` | `createOrchestrator`, agent presets (`CODER_AGENT`, `REVIEWER_AGENT`, `CONSENSUS_AGENT`), `defaultTeamConfig`. |
-| `orchestrator/tools.ts` | Tool implementations exposed to the agent — file I/O, shell, etc. Also hosts the sandbox-factory configuration. |
-| `consensus/index.ts` | `ClashEngine` — 5-phase debate orchestration, coherence scoring. |
-| `consensus/personas.ts` | Built-in personas (`BUILT_IN_PERSONAS`). |
+| `core/clash-engine/` | ClashEngine orchestrator — see section 2 above. |
+| `orchestrator/index.ts` | `createOrchestrator` adapter: creates a ClashEngine, registers sandbox tools. |
+| `orchestrator/tools.ts` | `SandboxHandle` lifecycle, sandbox tool definitions (sandbox_exec/write/read). |
+| `consensus/index.ts` | Convergence scoring heuristics, `LexicalConvergenceScorer`, `formatDebateReport`. |
+| `consensus/personas.ts` | Built-in personas, pluggable registries. |
+| `consensus/types.ts` | Debate types, `ConvergenceScorer` and `PersonaRegistry` interfaces. |
 | `consensus/store.ts` | `DebateStore` — persistent debate history. |
-| `sandbox/backend.ts` | `SandboxBackend` interface, `validateSandboxPath` path-traversal guard. |
-| `sandbox/factory.ts` | `createSandboxBackend`, `resolveBackend` — picks backend from config, caches singleton. |
-| `sandbox/backends/docker.ts` | Docker backend. |
-| `sandbox/backends/shuru.ts` | Shuru microVM backend (macOS/Apple Silicon; true VM isolation). |
-| `sandbox/backends/shuru-bootstrap.ts` | Lazy install / checkpoint restore. |
-| `sandbox/backends/local.ts` | **Local** backend — runs commands unsandboxed in the host cwd. Development only; emits a loud warning at startup. |
-| `logger.ts` | 5-level logger (`debug`/`info`/`warn`/`error`/`silent`), env + API controlled. |
-| `retry.ts` | `withRetry` + exponential-backoff helper, used by providers and sandbox bootstrap. |
-| `telemetry.ts` | In-process counters + optional OTel/Sentry exporters (dynamic import, fail-open). |
-| `errors.ts` | Typed error classes: `ClashCodeError`, `ConfigError`, `SandboxError`, `ProviderError`, `SessionError`, `DebateError`. |
+| `config/index.ts` | Settings load/save, migration, `DEFAULT_SETTINGS`. |
+| `config/keychain.ts` | `keytar`-backed API-key storage. |
+| `state/index.ts` | `SessionStore` — session persistence. |
+| `state/team-cache.ts` | `TeamCache` — keyed on `(goal + agents + model)` hash; TTL-based pruning. |
+| `sandbox/backend.ts` | `SandboxBackend` interface, `validateSandboxPath`. |
+| `sandbox/factory.ts` | `createSandboxBackend`, `resolveBackend` — picks backend from config. |
+| `sandbox/backends/` | Docker, Shuru (microVM), Local backends. |
 
 ---
 
@@ -112,10 +179,8 @@ turn.ts  executeTurn(runtime, msg)
     ▼
 runTeamTurn:
     ├─ TeamCache.key(msg, agents, model) → cache.get() → HIT? return
-    ├─ orchestrator.createTeam(uniqueName, teamConfig)
-    ├─ swap orchestrator.config.defaultModel to coordinatorModel
-    ├─ orchestrator.runTeam(team, msg)  // framework does the work
-    ├─ restore defaultModel
+    ├─ engine.executeSquad(blueprint, msg, coordinatorModel?)
+    │    └─ Runs each agent via runSpark(), then coordinator synthesis
     ├─ extract coordinator.output as final answer
     ├─ if diagnostics: printDiagnosticsPanel()
     └─ if cacheWorkerOutputs: teamCache.set(...)
@@ -123,37 +188,26 @@ runTeamTurn:
 
 Key invariants:
 - **The coordination view is the only thing writing to stderr during a
-  turn.** Tool output goes to the session log; agent progress is `feedEvent`
-  messages from the orchestrator's `onProgress` callback.
-- **Cache hits record 0 tokens** to the session store (fair accounting —
-  you didn't actually pay for them).
-- **`teamCallCount` monotonically increases** to keep team names unique
-  within the orchestrator's registry.
+  turn.** Agent progress flows through ArenaEvents → SignalBus → legacy
+  bridge → feedEvent.
+- **Cache hits record 0 tokens** (fair accounting).
+- **Team names are UUID-suffixed.** Concurrent turns are safe.
+- **No coordinator-model override hack.** ClashEngine's `executeSquad`
+  accepts an explicit `coordinatorModel` parameter.
 
 ---
 
 ## 4. Sharp edges (known coupling)
 
-### 4.1 Coordinator-model override
-`src/cli/turn.ts` and `docs/coordinator-model-override.md`. The upstream
-framework hardcodes the coordinator's model to `orchestrator.config.defaultModel`.
-We mutate that field before `runTeam()` and restore in a `finally`. Narrow
-structural cast; safe at runtime but coupled to framework internals.
+### 4.1 Sandbox lifecycle
+`src/orchestrator/tools.ts` uses `SandboxHandle` — a class that owns
+one lazy-created backend instance. The legacy `configureSandbox()` singleton
+API still works for backward compatibility.
 
-### 4.2 Sandbox factory singleton
-`src/orchestrator/tools.ts` holds a module-level `currentBackend` that
-tools call into. `configureSandbox()` mutates it; `resolveBackend()` reads
-it. This means you cannot run two clashcode sessions with different sandbox
-configs in the same process.
-
-### 4.3 `teamCallCount` as global counter
-Lives on the `Runtime`. If we ever support parallel team runs in the same
-session, this needs to move to a monotonic UUID or similar.
-
-### 4.4 Coordination view and `patch_stdout`
+### 4.2 Coordination view and cursor control
 Direct ANSI cursor control on stderr. Fine in a real terminal; breaks
-under `prompt_toolkit`-style stdout patching. If you're embedding clashcode,
-set `CLASHCODE_NO_TUI=1`.
+under `prompt_toolkit`-style stdout patching. If embedding clashcode,
+call `disableTUI()` or set `CLASHCODE_NO_TUI=1`.
 
 ---
 
@@ -163,11 +217,18 @@ set `CLASHCODE_NO_TUI=1`.
 1. Write a handler in `src/cli/commands.ts` returning `CommandResult`.
 2. Add one line to `COMMAND_REGISTRY`.
 3. Update autocomplete arguments in `src/cli/completer.ts` if it takes args.
-No dispatcher / help / test changes needed.
 
 ### Add a debate persona
-Add an entry to `BUILT_IN_PERSONAS` in `src/consensus/personas.ts`.
-`/perspectives` and `/consensus` pick it up automatically.
+Three ways:
+1. **Built-in:** Add to `BUILT_IN_PERSONAS` in `src/consensus/personas.ts`.
+2. **Config file:** Create `.clashcode/personas.json` with an array of
+   `Persona` objects; load with `ConfigPersonaRegistry`.
+3. **Custom registry:** Implement `PersonaRegistry` interface and pass to
+   `ClashEngine` constructor via `debateOptions.personaRegistry`.
+
+### Plug in a custom convergence scorer
+Implement `ConvergenceScorer` (see `src/consensus/types.ts`) and pass it
+to `ClashEngine` constructor via `debateOptions.scorer`.
 
 ### Add a sandbox backend
 1. Implement `SandboxBackend` interface from `src/sandbox/backend.ts`.
@@ -175,25 +236,25 @@ Add an entry to `BUILT_IN_PERSONAS` in `src/consensus/personas.ts`.
 3. Add a doctor check in `src/cli/doctor.ts`.
 
 ### Add a provider
-`createOrchestrator` uses the framework's provider registry. For new
-providers, add them to `VALID_PROVIDERS` in `src/cli/bootstrap.ts` and the
-keychain-lookup map in `src/config/keychain.ts`.
+Add to the provider maps in `src/core/clash-engine/execution-context.ts`
+(`UPSTREAM_MAP`, `BASE_URLS`, `ENV_KEY_MAP`).
+
+### Register custom tools
+Call `engine.registerTool(toolDef)` to add tools available to agents.
+The `defineTool()` helper converts Zod schemas to JSON Schema automatically.
 
 ---
 
 ## 6. Testing strategy
 
-- **Unit** (`test/*.test.ts`) — fast, in-process, no network. 14 files,
-  173 tests. Each module has a `.test.ts` sibling.
+- **Unit** (`test/*.test.ts`) — fast, in-process, no network. ~20 files,
+  ~250+ tests.
 - **Integration** (`test/integration/*.integration.test.ts`) — exercises
-  real sandbox backends. `sandbox-local.integration.test.ts` runs in CI on
-  all platforms; `sandbox-docker.integration.test.ts` runs when Docker is
-  available.
+  real sandbox backends.
 - **Snapshot** (`test/consensus-report.snapshot.test.ts`) — pins debate
   report format.
 
-Coverage gate: **74% lines / 79% branches** (enforced by
-`vitest.config.ts`).
+Coverage gate: **90% lines / 85% branches**.
 
 ---
 
@@ -201,7 +262,7 @@ Coverage gate: **74% lines / 79% branches** (enforced by
 
 ```
 ~/.clashcode/settings.json  ─┐
-env XAI_API_KEY              ├──▶ resolveApiKey ──▶ orchestrator
+env XAI_API_KEY              ├──▶ resolveApiKey ──▶ ClashEngine (Arena)
 OS keychain (keytar)         ─┘
 
 env CLASHCODE_LOG_LEVEL  ─▶ bootstrap.applyLogLevel ─▶ logger ─▶ stderr
@@ -211,5 +272,39 @@ env CLASHCODE_OTEL_ENDPOINT  ─▶ enableOtelExport  ─▶ in-proc metrics
 env CLASHCODE_SENTRY_DSN     ─▶ enableSentry      ─▶ error capture
 ```
 
-Telemetry is opt-in and fail-open: missing peer deps log a warning and
-continue. See `src/telemetry.ts`.
+---
+
+## 8. Docker security hardening
+
+| Option | Default | Description |
+|---|---|---|
+| `noNewPrivileges` | `true` | Blocks setuid/setgid bit elevation |
+| `readOnlyRootfs` | `false` | Read-only container root |
+| `seccompProfile` | `undefined` | Path to seccomp JSON, or `'builtin'` |
+| `apparmorProfile` | `undefined` | AppArmor profile name |
+| `capAdd` | `undefined` | Drops ALL capabilities and only adds these back |
+
+Shuru (microVM) provides stronger isolation than Docker by running in a
+true VM boundary.
+
+---
+
+## 9. Future directions
+
+### Embeddings-based convergence scoring
+The `ConvergenceScorer` interface is designed for this. An embeddings-based
+implementation would call an embedding API, compute cosine similarity, and
+map to the 0-100 scale.
+
+### Streaming agent output
+ClashEngine's SignalBus can be extended with a `content_delta` event kind
+to stream agent output token-by-token to the TUI.
+
+### Distributed team execution
+The Arena-per-session model is compatible with distributing agents across
+processes. Each process would get its own Arena with an independent
+SandboxHandle.
+
+### Plugin system for tools and commands
+The ToolVault and slash-command registry are both extensible. A plugin
+interface could load tools and commands from `.clashcode/plugins/`.

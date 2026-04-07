@@ -39,10 +39,11 @@
       "addLabels": ["major-upgrade", "needs-review"]
     },
     {
-      "description": "Pin @jackchen_me/open-multi-agent — framework drift is breaking-risk",
-      "matchPackageNames": ["@jackchen_me/open-multi-agent"],
+      "description": "Pin zod — schema validation, breaking changes need review",
+      "matchPackageNames": ["zod"],
+      "matchUpdateTypes": ["major"],
       "automerge": false,
-      "addLabels": ["framework-upgrade", "needs-review"]
+      "addLabels": ["needs-review"]
     }
   ],
   "vulnerabilityAlerts": {

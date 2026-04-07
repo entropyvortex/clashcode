@@ -1,15 +1,15 @@
 /**
  * Per-turn execution — takes a user message and drives it through either
- * the solo agent or the multi-agent team, rendering the live coordination
+ * the solo agent or the multi-agent squad, rendering the live coordination
  * view, handling cache hits, and printing the diagnostics panel.
  *
- * This is the hot path. Everything about team-vs-solo routing, cache
- * lookup, coordinator-model override, and per-agent diagnostics lives here
- * and nowhere else.
+ * v1.3: Powered by ClashEngine. No more coordinator-model override hack.
+ * Team names use crypto UUIDs for concurrent turn safety.
  *
  * @module cli/turn
  */
 
+import { randomUUID } from 'node:crypto'
 import {
   showCoordinationView,
   freezeCoordinationView,
@@ -30,10 +30,13 @@ interface TurnTokens {
  * either the solo agent or the team, prints the response, and updates
  * session token counters.
  *
- * Errors during execution are caught and rendered inline — they never
- * escape to the REPL, so the prompt always comes back.
+ * Accepts an optional `AbortSignal` for ESC-to-cancel support.
  */
-export async function executeTurn(runtime: Runtime, userMessage: string): Promise<void> {
+export async function executeTurn(
+  runtime: Runtime,
+  userMessage: string,
+  signal?: AbortSignal,
+): Promise<void> {
   try {
     runtime.store.append(runtime.session.id, { role: 'user', content: userMessage })
   } catch (err) {
@@ -54,9 +57,12 @@ export async function executeTurn(runtime: Runtime, userMessage: string): Promis
   const runStart = Date.now()
 
   try {
+    // Check for cancellation before starting
+    if (signal?.aborted) throw new Error('Cancelled')
+
     const { output, summary, tokens } = runtime.teamMode
-      ? await runTeamTurn(runtime, userMessage, runStart)
-      : await runSoloTurn(runtime, userMessage, runStart)
+      ? await runTeamTurn(runtime, userMessage, runStart, signal)
+      : await runSoloTurn(runtime, userMessage, runStart, signal)
 
     freezeCoordinationView()
     console.log(summary)
@@ -65,6 +71,8 @@ export async function executeTurn(runtime: Runtime, userMessage: string): Promis
     console.log(formatResponse(output))
   } catch (err) {
     clearCoordinationView()
+    // Abort errors from ESC-to-cancel are handled by the REPL
+    if (signal?.aborted) return
     const msg = err instanceof Error ? err.message : String(err)
     console.error(error(msg))
   }
@@ -80,8 +88,9 @@ async function runSoloTurn(
   runtime: Runtime,
   userMessage: string,
   runStart: number,
+  signal?: AbortSignal,
 ): Promise<TurnResult> {
-  const result = await runtime.orchestrator.runAgent(runtime.soloAgent, userMessage)
+  const result = await runtime.engine.executeAgent(runtime.soloAgent, userMessage, signal)
   const tu = result.tokenUsage
   const elapsed = ((Date.now() - runStart) / 1000).toFixed(1)
   const summary =
@@ -98,6 +107,7 @@ async function runTeamTurn(
   runtime: Runtime,
   userMessage: string,
   runStart: number,
+  signal?: AbortSignal,
 ): Promise<TurnResult> {
   // ── Cache probe ──────────────────────────────────────────────
   const cacheKey = TeamCache.key(userMessage, runtime.teamConfig.agents, runtime.settings.model)
@@ -112,35 +122,18 @@ async function runTeamTurn(
     }
   }
 
-  // ── Fresh run ────────────────────────────────────────────────
-  // Framework rejects duplicate team names, so we mint a unique one per call.
-  runtime.teamCallCount++
-  const teamName = `${runtime.teamConfig.name}-${runtime.teamCallCount}`
+  // ── Fresh run via ClashEngine ────────────────────────────────
+  const teamName = `${runtime.teamConfig.name}-${randomUUID().slice(0, 8)}`
   const runConfig = { ...runtime.teamConfig, name: teamName }
-  const team = runtime.orchestrator.createTeam(teamName, runConfig)
 
-  // Coordinator-model override — see docs/coordinator-model-override.md.
-  // The framework hardcodes the coordinator to the orchestrator's default
-  // model; we temporarily swap it to route through a cheaper model, then
-  // restore in the finally block.
-  interface OrchestratorInternal {
-    config: { defaultModel: string }
-  }
-  const orchMutable = runtime.orchestrator as unknown as OrchestratorInternal
-  const origModel = orchMutable.config.defaultModel
-  if (runtime.settings.coordinatorModel) {
-    orchMutable.config.defaultModel = runtime.settings.coordinatorModel
-  }
+  const result = await runtime.engine.executeSquad(
+    runConfig,
+    userMessage,
+    runtime.settings.coordinatorModel ?? undefined,
+    signal,
+  )
 
-  let result
-  try {
-    result = await runtime.orchestrator.runTeam(team, userMessage)
-  } finally {
-    orchMutable.config.defaultModel = origModel
-  }
-
-  // Coordinator synthesizes the final answer; fall back to first non-empty
-  // output if the framework didn't produce a coordinator result.
+  // Extract coordinator output as final answer
   const output =
     result.agentResults.get('coordinator')?.output ??
     [...result.agentResults.values()].find((r) => r.output)?.output ??
@@ -176,7 +169,7 @@ async function runTeamTurn(
   }
 }
 
-interface TeamRunResultShape {
+interface SquadResultShape {
   agentResults: Map<
     string,
     {
@@ -186,14 +179,9 @@ interface TeamRunResultShape {
   >
 }
 
-/**
- * Pretty-print a per-agent diagnostics table: time, tokens in/out, tool
- * calls, and percentage of total tokens. Only called when
- * `settings.diagnostics === true`.
- */
 function printDiagnosticsPanel(
   runtime: Runtime,
-  result: TeamRunResultShape,
+  result: SquadResultShape,
   elapsed: number,
   totalUsage: { input_tokens: number; output_tokens: number },
 ): void {
@@ -205,23 +193,18 @@ function printDiagnosticsPanel(
   )
   const totalTokens = totalUsage.input_tokens + totalUsage.output_tokens || 1
   for (const [name, r] of result.agentResults.entries()) {
-    // AgentRunResult carries some framework-internal extras (elapsed, model)
-    // that we probe defensively.
-    const rExtras = r as unknown as { elapsed?: number; model?: string }
     const aIn = r.tokenUsage.input_tokens ?? 0
     const aOut = r.tokenUsage.output_tokens ?? 0
     const aTot = aIn + aOut
     const aPct = ((aTot / totalTokens) * 100).toFixed(1)
-    const aTime = typeof rExtras.elapsed === 'number' ? rExtras.elapsed.toFixed(2) + 's' : '?'
     const tools = r.toolCalls?.length ?? 0
     const modelUsed =
       name === 'coordinator' && runtime.settings.coordinatorModel
         ? runtime.settings.coordinatorModel
-        : (rExtras.model ?? runtime.settings.model)
+        : runtime.settings.model
     const nameCol = name === 'coordinator' ? c.yellow : c.cyan
     lines.push(
       `  ${nameCol}${name.padEnd(22)}${c.reset} ` +
-        `${c.dim}${aTime.padStart(8)}${c.reset}  ` +
         `${c.dim}in:${c.reset}${aIn.toString().padStart(6)} ` +
         `${c.dim}out:${c.reset}${aOut.toString().padStart(6)} ` +
         `${c.dim}tools:${c.reset}${tools.toString().padStart(2)}  ` +

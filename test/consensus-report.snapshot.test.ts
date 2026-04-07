@@ -68,7 +68,7 @@ describe('ClashEngine.formatReport — snapshot', () => {
     expect(report).toMatchInlineSnapshot(`
       "╭─ ClashCode Debate ────────────────────────────╮
       │ Topic: Should we adopt microservices?
-      │ Convergence: 65/100 (heuristic — see docs/coherence-scoring.md)
+      │ Convergence: 65/100 (lexical scorer — see docs/coherence-scoring.md)
       │ 2 personas × 2 rounds
       ╰────────────────────────────────────────────────╯
 

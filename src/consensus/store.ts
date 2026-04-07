@@ -20,7 +20,9 @@ export class DebateStore {
 
   /** Get a debate by ID. */
   get(id: string): DebateResult | null {
-    const p = join(this.dir, `${id.replace(/[^a-zA-Z0-9_-]/g, '')}.json`)
+    const sanitized = id.replace(/[^a-zA-Z0-9_-]/g, '')
+    if (!sanitized) return null
+    const p = join(this.dir, `${sanitized}.json`)
     if (!existsSync(p)) return null
     try {
       return JSON.parse(readFileSync(p, 'utf-8')) as DebateResult

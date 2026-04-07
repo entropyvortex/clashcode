@@ -25,7 +25,7 @@ import {
 import { buildRuntime } from './runtime.js'
 import { runRepl } from './repl.js'
 import { DEFAULT_SETTINGS, saveSettings } from '../config/index.js'
-import { c, dim, info, success, error } from './ui.js'
+import { c, dim, info, success, error, initMarkdownRenderer } from './ui.js'
 
 installGlobalErrorHandlers()
 
@@ -93,6 +93,7 @@ export async function main(): Promise<void> {
 
   applyLogLevel(args.logLevel)
   maybeEnableTelemetry()
+  await initMarkdownRenderer()
 
   const runtime = await buildRuntime({ projectRoot: process.cwd(), args })
   await runRepl(runtime)

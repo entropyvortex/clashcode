@@ -8,3 +8,8 @@ coverage/
 .DS_Store
 **/.DS_Store
 Thumbs.db
+.pnpm-store
+
+.devcontainer/
+
+.clashcode/debates/

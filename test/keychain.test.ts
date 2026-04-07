@@ -37,13 +37,18 @@ describe('KeychainStore (keytar unavailable)', () => {
 })
 
 describe('resolveApiKey', () => {
-  const ORIG_ENV = { ...process.env }
+  let origTestKey: string | undefined
 
   beforeEach(() => {
+    origTestKey = process.env['TEST_API_KEY']
     delete process.env['TEST_API_KEY']
   })
   afterEach(() => {
-    process.env = { ...ORIG_ENV }
+    if (origTestKey === undefined) {
+      delete process.env['TEST_API_KEY']
+    } else {
+      process.env['TEST_API_KEY'] = origTestKey
+    }
   })
 
   it('prefers explicit override', async () => {

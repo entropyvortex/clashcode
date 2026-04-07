@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { validateSandboxPath } from '../src/sandbox/backend.js'
-import { DockerBackend } from '../src/sandbox/backends/docker.js'
+import { DockerBackend, BUILTIN_SECCOMP_PROFILE } from '../src/sandbox/backends/docker.js'
 import { ShuruBackend, isShuruAvailable } from '../src/sandbox/backends/shuru.js'
 import { LocalBackend } from '../src/sandbox/backends/local.js'
 import { resolveBackend, createSandboxBackend } from '../src/sandbox/factory.js'
+import { SandboxError } from '../src/errors.js'
 
 describe('sandbox/backend — path validation', () => {
   it('accepts absolute paths with safe chars', () => {
@@ -28,6 +29,51 @@ describe('sandbox/backend — path validation', () => {
     expect(() => validateSandboxPath('/tmp/$(whoami)')).toThrow('unsafe characters')
     expect(() => validateSandboxPath('/tmp/a`b`')).toThrow('unsafe characters')
     expect(() => validateSandboxPath('/tmp/a|b')).toThrow('unsafe characters')
+  })
+
+  it('throws SandboxError instances', () => {
+    expect(() => validateSandboxPath('')).toThrow(SandboxError)
+    expect(() => validateSandboxPath('relative')).toThrow(SandboxError)
+    expect(() => validateSandboxPath('/a/../b')).toThrow(SandboxError)
+    expect(() => validateSandboxPath('/tmp/a&b')).toThrow(SandboxError)
+  })
+
+  it('rejects paths with newlines and control characters', () => {
+    expect(() => validateSandboxPath('/tmp/a\nb')).toThrow('unsafe characters')
+    expect(() => validateSandboxPath('/tmp/a\tb')).toThrow('unsafe characters')
+    expect(() => validateSandboxPath('/tmp/a\0b')).toThrow('unsafe characters')
+  })
+
+  it('rejects paths with braces, brackets, and quotes', () => {
+    expect(() => validateSandboxPath('/tmp/{a}')).toThrow('unsafe characters')
+    expect(() => validateSandboxPath('/tmp/a"b')).toThrow('unsafe characters')
+    expect(() => validateSandboxPath("/tmp/a'b")).toThrow('unsafe characters')
+    expect(() => validateSandboxPath('/tmp/a[0]')).toThrow('unsafe characters')
+  })
+
+  it('rejects paths with glob wildcards', () => {
+    expect(() => validateSandboxPath('/tmp/*')).toThrow('unsafe characters')
+    expect(() => validateSandboxPath('/tmp/?.txt')).toThrow('unsafe characters')
+  })
+
+  it('accepts paths with spaces, dots, hyphens, underscores', () => {
+    expect(() => validateSandboxPath('/workspace/my file.ts')).not.toThrow()
+    expect(() => validateSandboxPath('/workspace/.hidden')).not.toThrow()
+    expect(() => validateSandboxPath('/workspace/a-b_c/d.e')).not.toThrow()
+  })
+
+  it('accepts root path', () => {
+    expect(() => validateSandboxPath('/')).not.toThrow()
+  })
+
+  it('rejects double-dot anywhere in path', () => {
+    expect(() => validateSandboxPath('/a/b..c')).toThrow('Path traversal')
+    expect(() => validateSandboxPath('/..hidden')).toThrow('Path traversal')
+  })
+
+  it('rejects path that is just ".."', () => {
+    // Starts with ".." which is relative, so hits "must be absolute" first
+    expect(() => validateSandboxPath('..')).toThrow('must be absolute')
   })
 })
 
@@ -65,6 +111,161 @@ describe('sandbox/backends/docker', () => {
   it('destroy() is safe before start', async () => {
     const b = new DockerBackend()
     await expect(b.destroy()).resolves.toBeUndefined()
+  })
+
+  it('constructor merges partial config with defaults', () => {
+    const b = new DockerBackend({ image: 'alpine:3.18', pidsLimit: 64 })
+    // It constructed successfully; name and isRunning confirm defaults applied
+    expect(b.name).toBe('docker')
+    expect(b.isRunning()).toBe(false)
+  })
+
+  it('constructor with no arguments uses all defaults', () => {
+    const b = new DockerBackend()
+    expect(b.name).toBe('docker')
+    expect(b.isRunning()).toBe(false)
+  })
+
+  it('constructor with empty object uses all defaults', () => {
+    const b = new DockerBackend({})
+    expect(b.name).toBe('docker')
+    expect(b.isRunning()).toBe(false)
+  })
+})
+
+describe('sandbox/backends/docker — BUILTIN_SECCOMP_PROFILE', () => {
+  it('has SCMP_ACT_ALLOW as defaultAction', () => {
+    expect(BUILTIN_SECCOMP_PROFILE.defaultAction).toBe('SCMP_ACT_ALLOW')
+  })
+
+  it('has a syscalls array with at least one entry', () => {
+    expect(Array.isArray(BUILTIN_SECCOMP_PROFILE.syscalls)).toBe(true)
+    expect(BUILTIN_SECCOMP_PROFILE.syscalls.length).toBeGreaterThan(0)
+  })
+
+  it('each syscall entry has names array, action, and errnoRet', () => {
+    for (const entry of BUILTIN_SECCOMP_PROFILE.syscalls) {
+      expect(Array.isArray(entry.names)).toBe(true)
+      expect(entry.names.length).toBeGreaterThan(0)
+      expect(entry.action).toBe('SCMP_ACT_ERRNO')
+      expect(typeof entry.errnoRet).toBe('number')
+    }
+  })
+
+  it('blocks dangerous syscalls like ptrace, mount, reboot', () => {
+    const blocked = BUILTIN_SECCOMP_PROFILE.syscalls.flatMap((e) => e.names)
+    expect(blocked).toContain('ptrace')
+    expect(blocked).toContain('mount')
+    expect(blocked).toContain('reboot')
+    expect(blocked).toContain('kexec_load')
+  })
+})
+
+describe('sandbox/backends/docker — destroy clears state even on failure', () => {
+  it('clears containerId and isRunning before attempting docker rm', async () => {
+    // By inspecting the source, destroy() sets containerId = null and
+    // _isRunning = false BEFORE calling execFileAsync('docker', ['rm'...]).
+    // This guarantees state is cleared even if docker rm throws.
+    // We verify by setting up internal state and calling destroy() —
+    // docker rm will fail (no real Docker), but state must still be cleared.
+    const b = new DockerBackend()
+    const bAny = b as any
+    bAny.containerId = 'fake-container-id-123'
+    bAny._isRunning = true
+
+    expect(b.isRunning()).toBe(true)
+
+    // destroy() will try `docker rm -f fake-container-id-123` which will
+    // fail since Docker is not available. The catch block swallows errors.
+    await b.destroy()
+
+    expect(b.isRunning()).toBe(false)
+    expect(bAny.containerId).toBeNull()
+  })
+
+  it('destroy is a no-op when containerId is already null', async () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    bAny.containerId = null
+    bAny._isRunning = false
+
+    // Should be a no-op, returning immediately
+    await expect(b.destroy()).resolves.toBeUndefined()
+  })
+
+  it('double destroy is safe', async () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    bAny.containerId = 'fake-id'
+    bAny._isRunning = true
+
+    await b.destroy()
+    await b.destroy() // second call should be a no-op
+
+    expect(b.isRunning()).toBe(false)
+    expect(bAny.containerId).toBeNull()
+  })
+})
+
+describe('sandbox/backends/docker — noNewPrivileges default', () => {
+  it('noNewPrivileges defaults to true', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.noNewPrivileges).toBe(true)
+  })
+
+  it('noNewPrivileges can be overridden to false', () => {
+    const b = new DockerBackend({ noNewPrivileges: false })
+    const bAny = b as any
+    expect(bAny.config.noNewPrivileges).toBe(false)
+  })
+
+  it('readOnlyRootfs defaults to false', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.readOnlyRootfs).toBe(false)
+  })
+
+  it('default image is node:20-slim', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.image).toBe('node:20-slim')
+  })
+
+  it('default memoryLimit is 512m', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.memoryLimit).toBe('512m')
+  })
+
+  it('default cpuLimit is 1', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.cpuLimit).toBe('1')
+  })
+
+  it('default pidsLimit is 256', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.pidsLimit).toBe(256)
+  })
+
+  it('default networkDisabled is true', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.networkDisabled).toBe(true)
+  })
+
+  it('default workDir is /workspace', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.workDir).toBe('/workspace')
+  })
+
+  it('default defaultTimeout is 30000', () => {
+    const b = new DockerBackend()
+    const bAny = b as any
+    expect(bAny.config.defaultTimeout).toBe(30000)
   })
 })
 

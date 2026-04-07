@@ -80,7 +80,9 @@ The CLI masks keys in `/config` output (first/last 4 chars). Add
 ClashCode maintains a minimal dependency tree to reduce supply-chain
 attack surface. Runtime dependencies:
 
-- `@jackchen_me/open-multi-agent` -- orchestrator
 - `zod` -- schema validation
+
+ClashCode owns its orchestration core (ClashEngine) with zero external
+agent framework dependencies.
 
 All other dependencies are devDependencies (build/test tooling only).

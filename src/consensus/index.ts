@@ -1,11 +1,22 @@
-import type { OpenMultiAgent } from '@jackchen_me/open-multi-agent'
-import { BUILT_IN_PERSONAS, getPersona } from './personas.js'
+/**
+ * Consensus / debate engine — convergence scoring and report formatting.
+ *
+ * v1.3: The debate orchestration has moved into ClashEngine's debate-runner.
+ * This module retains the convergence scoring heuristics, the
+ * LexicalConvergenceScorer, and the report formatter.
+ *
+ * @module consensus
+ */
+
+import { BuiltInPersonaRegistry } from './personas.js'
 import type {
   ConvergenceHeuristic,
+  ConvergenceScorer,
   DebateConfig,
   DebatePhase,
   DebateResult,
   Persona,
+  PersonaRegistry,
   RoundEntry,
 } from './types.js'
 import { c, box } from '../cli/ui.js'
@@ -13,12 +24,19 @@ import { randomUUID } from 'node:crypto'
 
 // Re-export types and personas for convenient access
 export { BUILT_IN_PERSONAS, listPersonas, getPersona } from './personas.js'
+export {
+  BuiltInPersonaRegistry,
+  CompositePersonaRegistry,
+  ConfigPersonaRegistry,
+} from './personas.js'
 export type {
   ConvergenceHeuristic,
+  ConvergenceScorer,
   DebateConfig,
   DebatePhase,
   DebateResult,
   Persona,
+  PersonaRegistry,
   RoundEntry,
   ConsensusEvent,
 } from './types.js'
@@ -63,14 +81,6 @@ export function phaseForRound(round: number): DebatePhase {
   }
 }
 
-/** Pick a good subset of personas for a debate (3-4). */
-function selectDefaultPersonas(): string[] {
-  const all = Object.keys(BUILT_IN_PERSONAS)
-  // Shuffle and pick 4
-  const shuffled = [...all].sort(() => Math.random() - 0.5)
-  return shuffled.slice(0, 4)
-}
-
 /** Build the context prompt containing all previous debate entries. */
 export function buildContext(
   topic: string,
@@ -104,7 +114,6 @@ export function buildContext(
 }
 
 // ── Convergence heuristic — lexical / text-stats scorers ───────────
-// See docs/coherence-scoring.md for methodology and known failure modes.
 
 /** Extract meaningful words (lowercase, 4+ chars, no stop words). */
 export function extractKeywords(text: string): Set<string> {
@@ -190,7 +199,6 @@ export function scoreAgreementConvergence(entries: RoundEntry[], finalRound: num
     }
   }
   const avgSim = pairs > 0 ? totalSim / pairs : 0
-  // Scale: 0.05 sim ≈ 30, 0.15 sim ≈ 60, 0.25+ ≈ 85+
   return Math.min(100, Math.round(avgSim * 350 + 20))
 }
 
@@ -219,7 +227,7 @@ export function scoreContradictionResolution(entries: RoundEntry[], finalRound: 
     .map((e) => e.content)
     .join(' ')
   const lateEntries = entries
-    .filter((e) => e.round >= finalRound - 1)
+    .filter((e) => e.round >= Math.max(1, finalRound - 1))
     .map((e) => e.content)
     .join(' ')
 
@@ -227,7 +235,7 @@ export function scoreContradictionResolution(entries: RoundEntry[], finalRound: 
   const lateResolutions = countPatterns(lateEntries, resolutionMarkers)
   const lateContradictions = countPatterns(lateEntries, contradictionMarkers)
 
-  if (earlyContradictions === 0) return 70 // No contradictions to resolve
+  if (earlyContradictions === 0) return 70
   const resolutionRatio = lateResolutions / (lateContradictions + 1)
   return Math.min(100, Math.round(40 + resolutionRatio * 30))
 }
@@ -280,7 +288,6 @@ export function scoreProposalSimilarity(entries: RoundEntry[], finalRound: numbe
   const finalEntries = entries.filter((e) => e.round === finalRound)
   if (finalEntries.length < 2) return 50
 
-  // Extract recommendation-like sentences (containing "recommend", "suggest", "should", "propose")
   const recMarkers = ['recommend', 'suggest', 'should', 'propose', 'approach', 'solution']
   const recommendations = finalEntries.map((e) => {
     const sentences = e.content.split(/[.!?]+/)
@@ -304,7 +311,6 @@ export function scoreProposalSimilarity(entries: RoundEntry[], finalRound: numbe
 }
 
 export function scoreConsensusSpeed(entries: RoundEntry[], totalRounds: number): number {
-  // Check when agreement language starts appearing
   const agreementMarkers = [
     'agree',
     'consensus',
@@ -323,7 +329,6 @@ export function scoreConsensusSpeed(entries: RoundEntry[], totalRounds: number):
   }
 
   if (earliestAgreementRound > totalRounds) return 30
-  // Earlier agreement = higher score. Round 1 = 95, round 2 = 80, round 3 = 65, round 4 = 50
   return Math.max(30, Math.min(100, 110 - earliestAgreementRound * 15))
 }
 
@@ -337,7 +342,6 @@ export function computeConvergence(
   const proposalSimilarity = scoreProposalSimilarity(entries, totalRounds)
   const consensusSpeed = scoreConsensusSpeed(entries, totalRounds)
 
-  // Weighted average: convergence and proposals matter most
   const overall = Math.round(
     agreementConvergence * 0.25 +
       contradictionResolution * 0.15 +
@@ -360,32 +364,148 @@ export function computeConvergence(
 export function buildSynthesis(entries: RoundEntry[], finalRound: number, topic: string): string {
   const finalEntries = entries.filter((e) => e.round === finalRound)
   if (finalEntries.length === 0) return 'No entries in the final round.'
-
   const parts = finalEntries.map((e) => `[${e.persona}]: ${e.content}`)
   return `Synthesis of ${finalEntries.length} perspectives on: ${topic}\n\n` + parts.join('\n\n')
 }
 
-// ── Main Engine ─────────────────────────────────────────────────────
+// ── Built-in lexical scorer (default) ───────────────────────────
 
-export class ClashEngine {
+/**
+ * Default convergence scorer using lexical / text-stats heuristics.
+ */
+export class LexicalConvergenceScorer implements ConvergenceScorer {
+  readonly name = 'lexical'
+
+  score(entries: RoundEntry[], totalRounds: number): ConvergenceHeuristic {
+    return computeConvergence(entries, totalRounds)
+  }
+}
+
+// ── Engine options ──────────────────────────────────────────────
+
+export interface ClashEngineOptions {
+  /** Pluggable convergence scorer. Defaults to LexicalConvergenceScorer. */
+  scorer?: ConvergenceScorer
+  /** Pluggable persona registry. Defaults to BuiltInPersonaRegistry. */
+  personaRegistry?: PersonaRegistry
+}
+
+// ── Report Formatter (used by CLI commands) ─────────────────────
+
+/**
+ * Format a debate result as a readable terminal report.
+ * Extracted from the old ClashEngine class for use by the CLI.
+ */
+export function formatDebateReport(result: DebateResult, scorerName: string = 'lexical'): string {
+  const lines: string[] = []
+
+  const scoreColor =
+    result.convergence.overall >= 70 ? c.green : result.convergence.overall >= 45 ? c.yellow : c.red
+  const scoreText = `${scoreColor}${c.bold}${result.convergence.overall}/100${c.reset}`
+
+  lines.push(
+    box(
+      'ClashCode Debate',
+      `${c.bold}Topic:${c.reset} ${result.topic}\n` +
+        `${c.bold}Convergence:${c.reset} ${scoreText} ` +
+        `${c.dim}(${scorerName} scorer — see docs/coherence-scoring.md)${c.reset}\n` +
+        `${c.dim}${result.personas.length} personas × ${result.rounds} rounds${c.reset}`,
+    ),
+  )
+  lines.push('')
+
+  const finalEntries = result.entries.filter((e) => e.round === result.rounds)
+  for (const entry of finalEntries) {
+    const personaLabel = `${c.cyan}${c.bold}${entry.persona}${c.reset}`
+    const firstLines = entry.content.split('\n').slice(0, 6).join('\n')
+    lines.push(`${personaLabel} ${c.dim}(round ${entry.round})${c.reset}`)
+    lines.push(
+      firstLines
+        .split('\n')
+        .map((l) => `  ${c.dim}│${c.reset} ${l}`)
+        .join('\n'),
+    )
+    lines.push('')
+  }
+
+  lines.push(`${c.bold}${c.magenta}Convergence Heuristic Breakdown${c.reset}`)
+  lines.push(formatBar('Agreement (lex)', result.convergence.agreementConvergence))
+  lines.push(formatBar('Contradictions', result.convergence.contradictionResolution))
+  lines.push(formatBar('Evidence density', result.convergence.evidenceGrounding))
+  lines.push(formatBar('Proposal overlap', result.convergence.proposalSimilarity))
+  lines.push(formatBar('Consensus speed', result.convergence.consensusSpeed))
+  lines.push('')
+
+  lines.push(box('Synthesis', result.synthesis.slice(0, 800)))
+  lines.push('')
+
+  const stats = [
+    `${c.dim}Tokens: ${result.totalTokensIn.toLocaleString()} in / ${result.totalTokensOut.toLocaleString()} out${c.reset}`,
+    `${c.dim}Time: ${result.totalElapsed.toFixed(1)}s${c.reset}`,
+  ]
+  lines.push(stats.join('  '))
+
+  return lines.join('\n')
+}
+
+function formatBar(label: string, score: number): string {
+  const barWidth = 20
+  const filled = Math.round((score / 100) * barWidth)
+  const empty = barWidth - filled
+  const color = score >= 70 ? c.green : score >= 45 ? c.yellow : c.red
+  const bar = `${color}${'█'.repeat(filled)}${c.dim}${'░'.repeat(empty)}${c.reset}`
+  const paddedLabel = label.padEnd(16)
+  return `  ${c.dim}${paddedLabel}${c.reset} ${bar} ${color}${score}${c.reset}`
+}
+
+// Keep PHASE_INSTRUCTIONS exported for backward compat
+export { PHASE_INSTRUCTIONS }
+
+// ── Legacy DebateEngine (backward-compat, exported as ClashEngine) ──
+
+/** Minimal orchestrator interface for backward-compatible debate runs. */
+interface LegacyOrchestrator {
+  runAgent(
+    config: { name: string; model: string; systemPrompt: string },
+    context: string,
+  ): Promise<{ output: string; tokenUsage?: { input_tokens?: number; output_tokens?: number } }>
+}
+
+/** Pick a good subset of personas for a debate (3-4). */
+function selectDefaultPersonas(registry: PersonaRegistry): string[] {
+  const all = registry.list()
+  const shuffled = [...all].sort(() => Math.random() - 0.5)
+  return shuffled.slice(0, 4)
+}
+
+/**
+ * Legacy debate engine class — preserved for backward compatibility
+ * with tests and consumers that use the old `new ClashEngine(model, provider)` API.
+ *
+ * New code should use the `ClashEngine` from `src/core/clash-engine/`.
+ *
+ * @deprecated Use `ClashEngine` from `core/clash-engine` instead.
+ */
+export class DebateEngine {
   private lastResult: DebateResult | null = null
-
-  /** The provider used when no persona-level override is set. */
   readonly provider: string
+  readonly scorer: ConvergenceScorer
+  readonly personaRegistry: PersonaRegistry
 
   constructor(
     private defaultModel: string,
     defaultProvider: string,
+    options?: ClashEngineOptions,
   ) {
     this.provider = defaultProvider
+    this.scorer = options?.scorer ?? new LexicalConvergenceScorer()
+    this.personaRegistry = options?.personaRegistry ?? new BuiltInPersonaRegistry()
   }
 
-  /** Run a structured multi-perspective debate. */
-  async runDebate(config: DebateConfig, orchestrator: OpenMultiAgent): Promise<DebateResult> {
+  async runDebate(config: DebateConfig, orchestrator: LegacyOrchestrator): Promise<DebateResult> {
     const totalRounds = config.rounds ?? 4
     const startTime = Date.now()
 
-    // Resolve personas
     const resolvedPersonas = this.resolvePersonas(config)
     const personaNames = resolvedPersonas.map((p) => p.name)
 
@@ -406,7 +526,6 @@ export class ClashEngine {
 
       for (const persona of resolvedPersonas) {
         const systemPrompt = persona.systemPrompt + '\n\n' + PHASE_INSTRUCTIONS[phase]
-
         const agentConfig = {
           name: persona.name,
           model: persona.model ?? this.defaultModel,
@@ -415,9 +534,34 @@ export class ClashEngine {
 
         config.onProgress?.({ type: 'persona_start', persona: persona.name, round })
         const roundStart = Date.now()
-        const result = await orchestrator.runAgent(agentConfig, context)
+        let result: {
+          output: string
+          tokenUsage?: { input_tokens?: number; output_tokens?: number }
+        }
+        try {
+          result = await orchestrator.runAgent(agentConfig, context)
+        } catch (err) {
+          const elapsed = (Date.now() - roundStart) / 1000
+          const errMsg = err instanceof Error ? err.message : String(err)
+          entries.push({
+            persona: persona.name,
+            round,
+            content: `[Error: ${errMsg}]`,
+            tokensIn: 0,
+            tokensOut: 0,
+            elapsed,
+          })
+          config.onProgress?.({
+            type: 'persona_complete',
+            persona: persona.name,
+            round,
+            tokensIn: 0,
+            tokensOut: 0,
+            elapsed,
+          })
+          continue
+        }
         const elapsed = (Date.now() - roundStart) / 1000
-
         entries.push({
           persona: persona.name,
           round,
@@ -436,10 +580,7 @@ export class ClashEngine {
         })
       }
 
-      // Emit interim convergence score after each round (scaled: partial debates need
-      // convergence relative to their own last round, so we compute against
-      // current round as the "final" round so far).
-      const interim = computeConvergence(entries, round)
+      const interim = await Promise.resolve(this.scorer.score(entries, round))
       config.onProgress?.({
         type: 'round_complete',
         round,
@@ -450,7 +591,7 @@ export class ClashEngine {
 
     config.onProgress?.({ type: 'debate_complete' })
 
-    const convergence = computeConvergence(entries, totalRounds)
+    const convergence = await Promise.resolve(this.scorer.score(entries, totalRounds))
     const synthesis = buildSynthesis(entries, totalRounds, config.topic)
 
     const totalTokensIn = entries.reduce((s, e) => s + e.tokensIn, 0)
@@ -471,113 +612,42 @@ export class ClashEngine {
       totalElapsed,
       timestamp: Date.now(),
     }
-
     this.lastResult = debateResult
     return debateResult
   }
 
-  /** Format a debate result as a readable terminal report. */
   formatReport(result: DebateResult): string {
-    const lines: string[] = []
-
-    // Title box
-    const scoreColor =
-      result.convergence.overall >= 70
-        ? c.green
-        : result.convergence.overall >= 45
-          ? c.yellow
-          : c.red
-    const scoreText = `${scoreColor}${c.bold}${result.convergence.overall}/100${c.reset}`
-
-    lines.push(
-      box(
-        'ClashCode Debate',
-        `${c.bold}Topic:${c.reset} ${result.topic}\n` +
-          `${c.bold}Convergence:${c.reset} ${scoreText} ` +
-          `${c.dim}(heuristic — see docs/coherence-scoring.md)${c.reset}\n` +
-          `${c.dim}${result.personas.length} personas × ${result.rounds} rounds${c.reset}`,
-      ),
-    )
-    lines.push('')
-
-    // Per-persona key points from final round
-    const finalEntries = result.entries.filter((e) => e.round === result.rounds)
-    for (const entry of finalEntries) {
-      const personaLabel = `${c.cyan}${c.bold}${entry.persona}${c.reset}`
-      const firstLines = entry.content.split('\n').slice(0, 6).join('\n')
-      lines.push(`${personaLabel} ${c.dim}(round ${entry.round})${c.reset}`)
-      lines.push(
-        firstLines
-          .split('\n')
-          .map((l) => `  ${c.dim}│${c.reset} ${l}`)
-          .join('\n'),
-      )
-      lines.push('')
-    }
-
-    // Convergence-heuristic breakdown — all text-stats; see docs/coherence-scoring.md
-    lines.push(`${c.bold}${c.magenta}Convergence Heuristic Breakdown${c.reset}`)
-    lines.push(this.formatBar('Agreement (lex)', result.convergence.agreementConvergence))
-    lines.push(this.formatBar('Contradictions', result.convergence.contradictionResolution))
-    lines.push(this.formatBar('Evidence density', result.convergence.evidenceGrounding))
-    lines.push(this.formatBar('Proposal overlap', result.convergence.proposalSimilarity))
-    lines.push(this.formatBar('Consensus speed', result.convergence.consensusSpeed))
-    lines.push('')
-
-    // Synthesis
-    lines.push(box('Synthesis', result.synthesis.slice(0, 800)))
-    lines.push('')
-
-    // Stats
-    const stats = [
-      `${c.dim}Tokens: ${result.totalTokensIn.toLocaleString()} in / ${result.totalTokensOut.toLocaleString()} out${c.reset}`,
-      `${c.dim}Time: ${result.totalElapsed.toFixed(1)}s${c.reset}`,
-    ]
-    lines.push(stats.join('  '))
-
-    return lines.join('\n')
+    return formatDebateReport(result, this.scorer.name)
   }
 
-  /** Get the last debate result (for /convergence command). */
   getLastResult(): DebateResult | null {
     return this.lastResult
   }
 
-  // ── Private ─────────────────────────────────────────────────────
-
   private resolvePersonas(config: DebateConfig): Persona[] {
     const personas: Persona[] = []
-
     if (config.customPersonas && config.customPersonas.length > 0) {
       personas.push(...config.customPersonas)
     }
-
     if (config.personas && config.personas.length > 0) {
       for (const name of config.personas) {
-        const p = getPersona(name)
+        const p = this.personaRegistry.get(name)
         if (p) personas.push(p)
       }
     }
-
-    // If nothing resolved, pick defaults
     if (personas.length === 0) {
-      const defaultNames = selectDefaultPersonas()
+      const defaultNames = selectDefaultPersonas(this.personaRegistry)
       for (const name of defaultNames) {
-        const p = BUILT_IN_PERSONAS[name]
+        const p = this.personaRegistry.get(name)
         if (p) personas.push(p)
       }
     }
-
     return personas
   }
-
-  private formatBar(label: string, score: number): string {
-    const barWidth = 20
-    const filled = Math.round((score / 100) * barWidth)
-    const empty = barWidth - filled
-    const color = score >= 70 ? c.green : score >= 45 ? c.yellow : c.red
-    const bar = `${color}${'█'.repeat(filled)}${c.dim}${'░'.repeat(empty)}${c.reset}`
-    const paddedLabel = label.padEnd(16)
-    return `  ${c.dim}${paddedLabel}${c.reset} ${bar} ${color}${score}${c.reset}`
-  }
 }
+
+/**
+ * @deprecated Backward-compatible alias. Use `ClashEngine` from
+ * `core/clash-engine` for new code.
+ */
+export { DebateEngine as ClashEngine }

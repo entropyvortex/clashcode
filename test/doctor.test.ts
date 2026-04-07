@@ -22,13 +22,15 @@ describe('runDoctor', () => {
   })
 
   it('reports api key as fail when none present', { timeout: 15000 }, async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const origEnv = { ...process.env } as any
-    delete process.env['XAI_API_KEY']
-    delete process.env['OPENAI_API_KEY']
-    delete process.env['ANTHROPIC_API_KEY']
-    delete process.env['COPILOT_API_KEY']
-    delete process.env['GEMINI_API_KEY']
+    const envKeys = [
+      'XAI_API_KEY',
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'COPILOT_API_KEY',
+      'GEMINI_API_KEY',
+    ] as const
+    const saved = Object.fromEntries(envKeys.map((k) => [k, process.env[k]]))
+    for (const k of envKeys) delete process.env[k]
     try {
       const settings: Settings = { ...DEFAULT_SETTINGS, apiKeys: {} }
       const checks = await runDoctor(settings)
@@ -37,11 +39,15 @@ describe('runDoctor', () => {
       // Either keychain has it or it's fail
       expect(['pass', 'fail']).toContain(keyCheck!.status)
     } finally {
-      process.env = origEnv
+      for (const k of envKeys) {
+        if (saved[k] === undefined) delete process.env[k]
+        else process.env[k] = saved[k]
+      }
     }
   })
 
   it('reports api key as pass when env var present', { timeout: 15000 }, async () => {
+    const origKey = process.env['XAI_API_KEY']
     process.env['XAI_API_KEY'] = 'xai-test-key'
     try {
       const settings: Settings = { ...DEFAULT_SETTINGS, provider: 'grok', apiKeys: {} }
@@ -50,7 +56,8 @@ describe('runDoctor', () => {
       // keychain may pre-empt env, so pass is the only must-have
       expect(['pass']).toContain(keyCheck!.status)
     } finally {
-      delete process.env['XAI_API_KEY']
+      if (origKey === undefined) delete process.env['XAI_API_KEY']
+      else process.env['XAI_API_KEY'] = origKey
     }
   })
 

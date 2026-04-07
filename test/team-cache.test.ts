@@ -49,14 +49,11 @@ describe('TeamCache', () => {
     expect(entry?.storedAt).toBeGreaterThan(0)
   })
 
-  it('respects TTL', () => {
+  it('respects TTL', async () => {
     const c = new TeamCache(tmpDir, { ttlMs: 1 })
     c.set('k', { output: 'x', tokIn: 1, tokOut: 1, agentBreakdown: '', elapsed: 0 })
-    // Sleep via sync loop
-    const until = Date.now() + 10
-    while (Date.now() < until) {
-      /* wait */
-    }
+    // Wait enough time for even coarse-grained clocks to advance past the TTL
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(c.get('k')).toBeNull()
   })
 

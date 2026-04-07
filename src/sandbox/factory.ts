@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { logger } from '../logger.js'
 import type { SandboxBackend } from './backend.js'
 import { DockerBackend, type DockerSandboxConfig } from './backends/docker.js'
 import { ShuruBackend, type ShuruSandboxConfig, isShuruAvailable } from './backends/shuru.js'
@@ -45,8 +46,16 @@ export async function resolveBackend(
   try {
     await execFileAsync('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 3000 })
     return 'docker'
-  } catch {
-    // Docker not installed or daemon not running
+  } catch (err: unknown) {
+    const code = (err as { code?: string }).code
+    if (code !== 'ENOENT') {
+      // Docker CLI exists but daemon is unreachable — warn so the user
+      // knows we fell back to the insecure local backend.
+      const msg = err instanceof Error ? err.message : String(err)
+      logger.warn(
+        `Docker CLI found but daemon unavailable (${msg}); falling back to local sandbox (no isolation)`,
+      )
+    }
   }
 
   return 'local'

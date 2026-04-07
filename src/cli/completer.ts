@@ -1,10 +1,13 @@
 /**
  * Tab-completion for slash commands and their subcommands.
  *
+ * v1.3: Synced with the full command registry in commands.ts.
+ * If you add a command there, add it here too.
+ *
  * @module cli/completer
  */
 
-/** Top-level slash commands. */
+/** Top-level slash commands — must stay in sync with COMMAND_REGISTRY in commands.ts. */
 const COMMANDS = [
   '/help',
   '/config',
@@ -20,8 +23,9 @@ const COMMANDS = [
   '/agent add',
   '/agent remove',
   '/consensus',
-  '/debate',
+  '/convergence',
   '/coherence',
+  '/debate',
   '/debates',
   '/perspectives',
   '/diagnostics',
@@ -51,7 +55,11 @@ const CONFIG_KEYS = [
   'baseUrl',
   'teamMode',
   'maxConcurrency',
+  'diagnostics',
+  'coordinatorModel',
+  'cacheWorkerOutputs',
   'sandbox.enabled',
+  'sandbox.backend',
   'sandbox.persistent',
   'sandbox.image',
 ]
@@ -72,7 +80,7 @@ export function completer(line: string): [string[], string] {
 
   const parts = trimmed.split(/\s+/)
 
-  // Completing the command itself: /he → /help, /health
+  // Completing the command itself: /he → /help
   if (parts.length === 1) {
     const partial = parts[0]!
     const hits = COMMANDS.filter((c) => c.startsWith(partial) && !c.includes(' '))
@@ -116,6 +124,24 @@ export function completer(line: string): [string[], string] {
     return [hits.map((h) => `/session ${h}`), trimmed]
   }
 
-  // /model — will be completed by model discovery, not here
+  // /diagnostics on|off
+  if (cmd === '/diagnostics' && parts.length === 2) {
+    const hits = ['on', 'off'].filter((s) => s.startsWith(sub))
+    return [hits.map((h) => `/diagnostics ${h}`), trimmed]
+  }
+
+  // /sandbox backend
+  if (cmd === '/sandbox' && parts.length === 2) {
+    const hits = ['auto', 'docker', 'shuru', 'local'].filter((s) => s.startsWith(sub))
+    return [hits.map((h) => `/sandbox ${h}`), trimmed]
+  }
+
+  // /keychain set|delete
+  if (cmd === '/keychain' && parts.length === 2) {
+    const hits = ['set', 'delete'].filter((s) => s.startsWith(sub))
+    return [hits.map((h) => `/keychain ${h}`), trimmed]
+  }
+
+  // /model — completed by model discovery at runtime, not here
   return [[], line]
 }

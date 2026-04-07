@@ -88,3 +88,41 @@ export interface ConsensusEvent {
   elapsed?: number
   convergence?: number // 0-100 interim convergence heuristic after round_complete
 }
+
+// ── Pluggable scoring interface (v1.3) ──────────────────────────
+
+/**
+ * Pluggable convergence scorer. The built-in lexical scorer implements
+ * this interface. Embeddings-based scorers can be plugged in by
+ * providing an implementation that maps entries to vectors and computes
+ * cosine similarity.
+ *
+ * @example
+ * ```ts
+ * const embeddingsScorer: ConvergenceScorer = {
+ *   name: 'embeddings',
+ *   async score(entries, totalRounds) {
+ *     // call embeddings API, compute cosine similarity...
+ *     return { overall: 82, agreementConvergence: 90, ... }
+ *   },
+ * }
+ * const engine = new ClashEngine(model, provider, { scorer: embeddingsScorer })
+ * ```
+ */
+export interface ConvergenceScorer {
+  readonly name: string
+  score(
+    entries: RoundEntry[],
+    totalRounds: number,
+  ): ConvergenceHeuristic | Promise<ConvergenceHeuristic>
+}
+
+/**
+ * Pluggable persona registry. Allows loading personas from external
+ * config files, databases, or APIs.
+ */
+export interface PersonaRegistry {
+  list(): string[]
+  get(name: string): Persona | undefined
+  getAll(): Record<string, Persona>
+}

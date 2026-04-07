@@ -6,6 +6,7 @@
  *  - optional network isolation (`--network none`)
  *  - path validation on all file I/O
  *  - `docker cp` for file transfer (no shell interpolation)
+ *  - optional seccomp and AppArmor profiles (v1.3)
  *
  * This is the default backend on Linux. On macOS/Apple Silicon we
  * prefer the Shuru microVM backend (stronger isolation + no Docker
@@ -19,7 +20,7 @@ import { promisify } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs'
 
 import type { SandboxBackend, ExecResult, ExecOptions, CommonSandboxConfig } from '../backend.js'
 import { validateSandboxPath } from '../backend.js'
@@ -27,15 +28,38 @@ import { SandboxError } from '../../errors.js'
 
 const execFileAsync = promisify(execFile)
 
-/** Docker-specific config fields (image, resource limits). */
+/** Docker-specific config fields (image, resource limits, security profiles). */
 export interface DockerSandboxConfig extends CommonSandboxConfig {
   image?: string
   memoryLimit?: string
   cpuLimit?: string
   pidsLimit?: number
+  /** Path to a seccomp profile JSON file. Set to 'builtin' for the default hardened profile. */
+  seccompProfile?: string
+  /** AppArmor profile name to apply. Set to 'unconfined' to disable. */
+  apparmorProfile?: string
+  /** Drop all Linux capabilities and only add back the ones listed here. */
+  capAdd?: string[]
+  /** Whether to mount the filesystem as read-only (container root). */
+  readOnlyRootfs?: boolean
+  /** Disable setuid/setgid bit elevation inside the container. */
+  noNewPrivileges?: boolean
 }
 
-const DEFAULT_CONFIG: Required<DockerSandboxConfig> = {
+const DEFAULT_CONFIG: Required<
+  Pick<
+    DockerSandboxConfig,
+    | 'image'
+    | 'memoryLimit'
+    | 'cpuLimit'
+    | 'pidsLimit'
+    | 'networkDisabled'
+    | 'workDir'
+    | 'defaultTimeout'
+    | 'noNewPrivileges'
+    | 'readOnlyRootfs'
+  >
+> = {
   image: 'node:20-slim',
   memoryLimit: '512m',
   cpuLimit: '1',
@@ -43,14 +67,54 @@ const DEFAULT_CONFIG: Required<DockerSandboxConfig> = {
   networkDisabled: true,
   workDir: '/workspace',
   defaultTimeout: 30000,
+  noNewPrivileges: true,
+  readOnlyRootfs: false,
+}
+
+/**
+ * Built-in seccomp profile that blocks dangerous syscalls.
+ * Used when `seccompProfile === 'builtin'`.
+ */
+export const BUILTIN_SECCOMP_PROFILE = {
+  defaultAction: 'SCMP_ACT_ALLOW',
+  syscalls: [
+    {
+      names: [
+        'kexec_load',
+        'kexec_file_load',
+        'reboot',
+        'mount',
+        'umount2',
+        'pivot_root',
+        'swapon',
+        'swapoff',
+        'init_module',
+        'finit_module',
+        'delete_module',
+        'acct',
+        'settimeofday',
+        'clock_settime',
+        'stime',
+        'nfsservctl',
+        'personality',
+        'keyctl',
+        'request_key',
+        'add_key',
+        'ptrace',
+      ],
+      action: 'SCMP_ACT_ERRNO',
+      errnoRet: 1,
+    },
+  ],
 }
 
 export class DockerBackend implements SandboxBackend {
   readonly name = 'docker' as const
 
-  private config: Required<DockerSandboxConfig>
+  private config: DockerSandboxConfig & typeof DEFAULT_CONFIG
   private containerId: string | null = null
   private _isRunning = false
+  private _seccompTmpPath: string | null = null
 
   constructor(config?: DockerSandboxConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config }
@@ -79,6 +143,46 @@ export class DockerBackend implements SandboxBackend {
       args.push('--network', 'none')
     }
 
+    // Security hardening flags (v1.3)
+    if (this.config.noNewPrivileges) {
+      args.push('--security-opt', 'no-new-privileges:true')
+    }
+
+    if (this.config.readOnlyRootfs) {
+      args.push('--read-only')
+      // Need a writable tmpfs for /tmp and /workspace
+      args.push('--tmpfs', '/tmp:rw,noexec,nosuid,size=64m')
+      args.push('--tmpfs', `${this.config.workDir}:rw,exec,nosuid,size=256m`)
+    }
+
+    // Seccomp profile
+    if (this.config.seccompProfile) {
+      if (this.config.seccompProfile === 'builtin') {
+        // Write the built-in profile to a temp file; cleaned up after docker run below.
+        this._seccompTmpPath = join(
+          tmpdir(),
+          `clashcode-seccomp-${randomBytes(4).toString('hex')}.json`,
+        )
+        writeFileSync(this._seccompTmpPath, JSON.stringify(BUILTIN_SECCOMP_PROFILE), 'utf-8')
+        args.push('--security-opt', `seccomp=${this._seccompTmpPath}`)
+      } else if (existsSync(this.config.seccompProfile)) {
+        args.push('--security-opt', `seccomp=${this.config.seccompProfile}`)
+      }
+    }
+
+    // AppArmor profile
+    if (this.config.apparmorProfile) {
+      args.push('--security-opt', `apparmor=${this.config.apparmorProfile}`)
+    }
+
+    // Capability control
+    if (this.config.capAdd && this.config.capAdd.length > 0) {
+      args.push('--cap-drop', 'ALL')
+      for (const cap of this.config.capAdd) {
+        args.push('--cap-add', cap)
+      }
+    }
+
     args.push(this.config.image, 'sleep', 'infinity')
 
     try {
@@ -90,6 +194,16 @@ export class DockerBackend implements SandboxBackend {
         `Failed to start docker sandbox: ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       )
+    } finally {
+      // Clean up the seccomp temp file now that docker has read it.
+      if (this._seccompTmpPath) {
+        try {
+          unlinkSync(this._seccompTmpPath)
+        } catch {
+          /* best effort */
+        }
+        this._seccompTmpPath = null
+      }
     }
   }
 
@@ -177,13 +291,14 @@ export class DockerBackend implements SandboxBackend {
 
   async destroy(): Promise<void> {
     if (!this.containerId) return
+    const id = this.containerId
+    this.containerId = null
+    this._isRunning = false
     try {
-      await execFileAsync('docker', ['rm', '-f', this.containerId], { timeout: 15000 })
+      await execFileAsync('docker', ['rm', '-f', id], { timeout: 15000 })
     } catch {
       // best effort
     }
-    this.containerId = null
-    this._isRunning = false
   }
 
   isRunning(): boolean {

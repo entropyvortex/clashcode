@@ -1,6 +1,6 @@
 /**
  * Interactive REPL loop — readline, paste detection, slash-command
- * dispatch, and graceful shutdown.
+ * dispatch, ESC-to-cancel, and graceful shutdown.
  *
  * Owns zero business logic. Orchestrator / team execution lives in
  * {@link ./turn.ts}; slash commands live in {@link ./commands.ts}.
@@ -8,7 +8,7 @@
  * @module cli/repl
  */
 
-import { createInterface } from 'node:readline'
+import { createInterface, emitKeypressEvents } from 'node:readline'
 import { banner, c, error } from './ui.js'
 import { clearCoordinationView } from './coordination-view.js'
 import { completer } from './completer.js'
@@ -19,6 +19,9 @@ import { AGENT_PRESETS, type Runtime } from './runtime.js'
 
 /** Time window (ms) used to distinguish paste events from typed lines. */
 const PASTE_DELAY_MS = 50
+
+/** Time window (ms) for double-ESC confirmation. */
+const ESC_CONFIRM_MS = 2000
 
 /**
  * Start the interactive REPL. Returns the promise that resolves when the
@@ -50,10 +53,63 @@ export async function runRepl(runtime: Runtime): Promise<void> {
     process.exit(0)
   }
 
+  // ── ESC-to-cancel support ──────────────────────────────────
+  //
+  // We use readline.emitKeypressEvents + raw mode to intercept ESC while
+  // an agent turn is running. Raw mode is enabled when a turn starts and
+  // restored when it ends, so readline's normal line-editing still works
+  // at the prompt.
+  let activeAbort: AbortController | null = null
+  let escPending = false
+  let escTimer: ReturnType<typeof setTimeout> | null = null
+  let running = false
+
+  // Enable keypress events on stdin so we can listen for individual keys.
+  emitKeypressEvents(process.stdin)
+
+  process.stdin.on('keypress', (_ch, key: { name?: string; sequence?: string } | undefined) => {
+    if (!running || !activeAbort) return
+    if (key?.name === 'escape') {
+      handleEsc()
+    }
+  })
+
+  function handleEsc(): void {
+    if (!activeAbort) return
+
+    if (escPending) {
+      // Second ESC — abort (view already cleared on first ESC)
+      escPending = false
+      if (escTimer) {
+        clearTimeout(escTimer)
+        escTimer = null
+      }
+      process.stderr.write(`${c.red}${c.bold}Cancelled.${c.reset}\n`)
+      activeAbort.abort()
+      return
+    }
+
+    // First ESC — stop the TUI animation before writing anything, then prompt
+    clearCoordinationView()
+    escPending = true
+    process.stderr.write(`${c.yellow}Cancel? Press ESC again to confirm${c.reset}\n`)
+    escTimer = setTimeout(() => {
+      escPending = false
+      escTimer = null
+    }, ESC_CONFIRM_MS)
+  }
+
+  /** Enable raw mode so individual keystrokes (ESC) are delivered immediately. */
+  function enterRawMode(): void {
+    if (process.stdin.isTTY) process.stdin.setRawMode(true)
+  }
+
+  /** Restore cooked mode when the turn is over. */
+  function exitRawMode(): void {
+    if (process.stdin.isTTY) process.stdin.setRawMode(false)
+  }
+
   // ── Paste-aware line buffering ───────────────────────────────
-  // Lines arriving in quick succession are treated as a single paste and
-  // joined. This avoids accidentally running the first line as a command
-  // when the user pastes multi-line content.
   const lineBuffer: string[] = []
   let pasteTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -76,12 +132,31 @@ export async function runRepl(runtime: Runtime): Promise<void> {
         showPrompt()
         return
       }
-      handleLine(runtime, input, goodbye)
+
+      // Create an AbortController for this operation
+      const abort = new AbortController()
+      activeAbort = abort
+      running = true
+      enterRawMode()
+
+      handleLine(runtime, input, goodbye, abort.signal)
         .catch((err) => {
+          if (abort.signal.aborted) {
+            clearCoordinationView()
+            return
+          }
           const msg = err instanceof Error ? err.message : String(err)
           console.error(error(`Unexpected error: ${msg}`))
         })
         .finally(() => {
+          exitRawMode()
+          activeAbort = null
+          running = false
+          escPending = false
+          if (escTimer) {
+            clearTimeout(escTimer)
+            escTimer = null
+          }
           if (!exiting) showPrompt()
         })
     }, PASTE_DELAY_MS)
@@ -93,8 +168,6 @@ export async function runRepl(runtime: Runtime): Promise<void> {
 
   showPrompt()
 
-  // Resolve when the process is about to exit. We never actually resolve
-  // under normal operation — `goodbye()` calls `process.exit(0)`.
   return new Promise<void>(() => {})
 }
 
@@ -102,7 +175,12 @@ export async function runRepl(runtime: Runtime): Promise<void> {
  * Route one line of input: slash command → {@link handleCommand}, plain
  * text → {@link executeTurn}.
  */
-async function handleLine(runtime: Runtime, line: string, goodbye: () => void): Promise<void> {
+async function handleLine(
+  runtime: Runtime,
+  line: string,
+  goodbye: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
   const trimmed = line.trim()
   if (!trimmed) return
 
@@ -117,9 +195,8 @@ async function handleLine(runtime: Runtime, line: string, goodbye: () => void): 
         teamConfig: runtime.teamConfig,
         agentPresets: AGENT_PRESETS,
         model: runtime.settings.model,
-        consensus: runtime.consensus,
+        engine: runtime.engine,
         debateStore: runtime.debateStore,
-        orchestrator: runtime.orchestrator,
       })
       console.log(result.output)
       if (result.updatedSettings) Object.assign(runtime.settings, result.updatedSettings)
@@ -137,5 +214,5 @@ async function handleLine(runtime: Runtime, line: string, goodbye: () => void): 
     return
   }
 
-  await executeTurn(runtime, trimmed)
+  await executeTurn(runtime, trimmed, signal)
 }

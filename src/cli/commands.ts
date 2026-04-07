@@ -2,9 +2,10 @@ import { type Settings, updateSetting } from '../config/index.js'
 import type { SessionStore } from '../state/index.js'
 import { c, box, dim, info, error, success } from './ui.js'
 import { fetchModels, formatModelMenu, parseModelChoice, type ModelEntry } from './model-select.js'
-import type { TeamConfig, AgentConfig, OpenMultiAgent } from '@jackchen_me/open-multi-agent'
-import type { ClashEngine } from '../consensus/index.js'
+import type { AgentSpec, SquadBlueprint } from '../core/clash-engine/index.js'
+import type { ClashEngine } from '../core/clash-engine/index.js'
 import type { ConsensusEvent } from '../consensus/types.js'
+import { formatDebateReport } from '../consensus/index.js'
 import { showCoordinationView, feedEvent, freezeCoordinationView } from './coordination-view.js'
 import type { AgentStatus } from './coordination-view.js'
 import type { DebateStore } from '../consensus/store.js'
@@ -19,12 +20,11 @@ export interface CommandContext {
   sessionStore: SessionStore
   currentSessionId: string | null
   teamMode: boolean
-  teamConfig: TeamConfig
-  agentPresets: Record<string, AgentConfig>
+  teamConfig: SquadBlueprint
+  agentPresets: Record<string, AgentSpec>
   model: string
-  consensus: ClashEngine
+  engine: ClashEngine
   debateStore: DebateStore
-  orchestrator: OpenMultiAgent
 }
 
 export interface CommandResult {
@@ -33,7 +33,7 @@ export interface CommandResult {
   updatedSettings?: Settings
   newSessionId?: string
   teamModeChanged?: boolean
-  updatedTeamConfig?: TeamConfig
+  updatedTeamConfig?: SquadBlueprint
 }
 
 function maskKey(key: string): string {
@@ -90,7 +90,6 @@ function handleConfig(args: string[], ctx: CommandContext): CommandResult {
     if (!key || !rawValue) {
       return { output: error('Usage: /config set <key> <value>') }
     }
-    // Parse booleans, numbers, null
     let value: unknown = rawValue
     if (rawValue === 'true') value = true
     else if (rawValue === 'false') value = false
@@ -108,7 +107,6 @@ function handleConfig(args: string[], ctx: CommandContext): CommandResult {
     }
   }
 
-  // Show current config
   const s = ctx.settings
   const maskedKeys: Record<string, string> = {}
   for (const [provider, key] of Object.entries(s.apiKeys)) {
@@ -142,11 +140,9 @@ function handleConfig(args: string[], ctx: CommandContext): CommandResult {
   return { output: box('Configuration', lines.join('\n')) }
 }
 
-// Cached model list from last /model discovery
 let cachedModels: ModelEntry[] = []
 
 async function handleModel(args: string[], ctx: CommandContext): Promise<CommandResult> {
-  // /model — fetch and show available models
   if (args.length === 0) {
     try {
       cachedModels = await fetchModels(ctx.settings)
@@ -161,7 +157,6 @@ async function handleModel(args: string[], ctx: CommandContext): Promise<Command
     }
   }
 
-  // /model <number or name> — select a model
   const input = args.join(' ')
   const choice = parseModelChoice(input, cachedModels)
   if (!choice) {
@@ -209,7 +204,6 @@ function handleSession(args: string[], ctx: CommandContext): CommandResult {
     }
   }
 
-  // Default: list sessions
   try {
     const sessions = ctx.sessionStore.list()
     if (sessions.length === 0) {
@@ -286,7 +280,6 @@ function handleTeam(args: string[], ctx: CommandContext): CommandResult {
 function handleAgent(args: string[], ctx: CommandContext): CommandResult {
   const sub = args[0]?.toLowerCase()
 
-  // /agent remove <name>
   if (sub === 'remove' || sub === 'rm') {
     const name = args[1]
     if (!name) return { output: error('Usage: /agent remove <name>') }
@@ -302,7 +295,7 @@ function handleAgent(args: string[], ctx: CommandContext): CommandResult {
     if (current.length <= 1) {
       return { output: error('Cannot remove the last agent. Team must have at least one agent.') }
     }
-    const updated: TeamConfig = {
+    const updated: SquadBlueprint = {
       ...ctx.teamConfig,
       agents: [...current.slice(0, idx), ...current.slice(idx + 1)],
     }
@@ -314,7 +307,6 @@ function handleAgent(args: string[], ctx: CommandContext): CommandResult {
     }
   }
 
-  // /agent add <name>
   if (sub === 'add') {
     const name = args[1]
     if (!name) {
@@ -330,7 +322,7 @@ function handleAgent(args: string[], ctx: CommandContext): CommandResult {
     if (current.some((a) => a.name === name)) {
       return { output: info(`Agent "${name}" is already in the team.`) }
     }
-    const updated: TeamConfig = {
+    const updated: SquadBlueprint = {
       ...ctx.teamConfig,
       agents: [...current, { ...preset, model: ctx.model }],
     }
@@ -342,7 +334,6 @@ function handleAgent(args: string[], ctx: CommandContext): CommandResult {
     }
   }
 
-  // /agent — list current roster
   const current = ctx.teamConfig.agents
   if (current.length === 0) {
     return { output: info('No agents in the team.') }
@@ -364,7 +355,6 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
     return { output: error('Usage: /consensus [rounds] <topic>') }
   }
 
-  // Parse optional round count: '/consensus 5 should we use rust?'
   let rounds: number | undefined
   let topicArgs = args
   const firstArg = args[0]!
@@ -379,7 +369,6 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
   }
 
   try {
-    // Build agent status list from personas that will participate
     const personaNames = Object.keys(BUILT_IN_PERSONAS)
     const agents: AgentStatus[] = personaNames.map((name) => ({
       name,
@@ -388,7 +377,6 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
     }))
     showCoordinationView(topic, agents)
 
-    // Seed the consensus sub-panel at 0% before the first phase fires
     const initialRounds = rounds ?? 4
     feedEvent({
       type: 'consensus_update',
@@ -445,8 +433,7 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
       }
     }
 
-    const result = await ctx.consensus.runDebate({ topic, rounds, onProgress }, ctx.orchestrator)
-    // Update sub-panel with final convergence score + phase=complete before freezing
+    const result = await ctx.engine.executeClashDebate({ topic, rounds, onProgress })
     feedEvent({
       type: 'consensus_update',
       data: {
@@ -458,7 +445,7 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
     })
     freezeCoordinationView()
     ctx.debateStore.save(result)
-    const report = ctx.consensus.formatReport(result)
+    const report = formatDebateReport(result, ctx.engine.scorer.name)
     return { output: report }
   } catch (e) {
     freezeCoordinationView()
@@ -467,11 +454,11 @@ async function handleConsensus(args: string[], ctx: CommandContext): Promise<Com
 }
 
 function handleConvergence(ctx: CommandContext): CommandResult {
-  const result = ctx.consensus.getLastResult()
+  const result = ctx.engine.getLastDebateResult()
   if (!result) {
     return { output: info('No debate results. Run /consensus <topic> first.') }
   }
-  return { output: ctx.consensus.formatReport(result) }
+  return { output: formatDebateReport(result, ctx.engine.scorer.name) }
 }
 
 async function handleDoctor(ctx: CommandContext): Promise<CommandResult> {
@@ -609,10 +596,8 @@ function handlePerspectives(): CommandResult {
 }
 
 function handleDebates(args: string[], ctx: CommandContext): CommandResult {
-  // /debates <id> — show a specific debate
   if (args.length > 0) {
     const id = args[0]!
-    // Allow prefix matching
     const all = ctx.debateStore.list()
     const match = all.find((d) => d.id === id || d.id.startsWith(id))
     if (!match) {
@@ -622,10 +607,9 @@ function handleDebates(args: string[], ctx: CommandContext): CommandResult {
     if (!result) {
       return { output: error(`Could not load debate: ${match.id}`) }
     }
-    return { output: ctx.consensus.formatReport(result) }
+    return { output: formatDebateReport(result) }
   }
 
-  // /debates — list all debates
   const debates = ctx.debateStore.list()
   if (debates.length === 0) {
     return { output: info('No debates yet. Run /consensus <topic> to start one.') }
@@ -652,10 +636,6 @@ function handleExit(): CommandResult {
 }
 
 // ── Command registry ────────────────────────────────────────────
-//
-// Each slash command is defined once in COMMAND_REGISTRY. Adding a new
-// command is a one-line entry here + a handler above — no changes to
-// the dispatcher, no changes to autocomplete, no giant switch statement.
 
 type CommandHandler = (
   args: string[],
@@ -663,11 +643,8 @@ type CommandHandler = (
 ) => CommandResult | Promise<CommandResult>
 
 interface CommandSpec {
-  /** Canonical name (with leading slash). */
   name: string
-  /** Alias names (with leading slash). */
   aliases?: readonly string[]
-  /** Async handler. Missing ctx is allowed — ctx is supplied by dispatcher. */
   handler: CommandHandler
 }
 

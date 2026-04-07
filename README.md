@@ -41,6 +41,8 @@ personas argue design decisions through structured phases). See the
 
 This project is honest about what it is.
 
+- ** It is experimental ** This is proving grounds with unproved thesis and orchestration.
+
 - **The debate score is a `ConvergenceHeuristic`, not a quality metric.**
   It's computed from keyword Jaccard similarity, evidence-marker counts,
   and pattern matching — classic bag-of-words stats. Two personas can
@@ -61,11 +63,10 @@ This project is honest about what it is.
 - **Higher token cost.** Team mode runs multiple agents; consensus mode
   runs `personas × rounds` LLM calls. Expect 3-10× the token spend of
   a single-model call for the same question.
-- **Upstream framework dependency.** Agent orchestration rides on
-  [@jackchen_me/open-multi-agent](https://github.com/jackchen-me/open-multi-agent).
-  It's MIT, we pin it, and we have a minor runtime workaround for the
-  coordinator-model field documented in `ARCHITECTURE.md` — but our
-  fate is partly tied to theirs. This may be a good way to stress test their code, and we can create our own orchestrator if deemed necessary.
+- **Own orchestration core.** ClashCode v1.3 owns its orchestration
+  layer (ClashEngine) with zero external agent framework dependencies.
+  This gives full control over security, TUI integration, and the
+  agent-tool calling loop.
 - **The local sandbox is not a sandbox.** It's there because
   inner-loop dev iteration needs fast paths; it runs agent commands on
   your host shell with your user's privileges. Use Docker or Shuru for
@@ -345,11 +346,8 @@ release flow, and how to add personas or commands.
 
 ## Credits
 
-Built on top of
-**[@jackchen_me/open-multi-agent](https://github.com/jackchen-me/open-multi-agent)**
-by Jack Chen — the agent orchestration framework that handles team
-coordination, task decomposition, and the coordinator/worker pattern.
-MIT-licensed.
+**ClashEngine** — the orchestration core is fully owned by ClashCode as of
+v1.3. No external agent framework dependencies.
 
 The **Shuru microVM sandbox** is
 [superhq-ai/shuru](https://github.com/superhq-ai/shuru) — ephemeral
