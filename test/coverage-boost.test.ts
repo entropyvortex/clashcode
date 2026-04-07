@@ -5,6 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+
+const isWindows = process.platform === 'win32'
 import { join } from 'node:path'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -121,7 +123,7 @@ describe('LocalBackend — additional edge cases', () => {
     expect(result.exitCode).not.toBe(0)
   })
 
-  it('exec respects cwd option', async () => {
+  it.skipIf(isWindows)('exec respects cwd option', async () => {
     const { realpathSync } = await import('node:fs')
     const { LocalBackend } = await import('../src/sandbox/backends/local.js')
     const backend = new LocalBackend()
@@ -130,7 +132,7 @@ describe('LocalBackend — additional edge cases', () => {
     expect(result.stdout.trim()).toBe(realpathSync('/tmp'))
   })
 
-  it('exec respects env option', async () => {
+  it.skipIf(isWindows)('exec respects env option', async () => {
     const { LocalBackend } = await import('../src/sandbox/backends/local.js')
     const backend = new LocalBackend()
     await backend.start()
@@ -138,7 +140,7 @@ describe('LocalBackend — additional edge cases', () => {
     expect(result.stdout.trim()).toBe('hello123')
   })
 
-  it('writeFile creates parent directories', async () => {
+  it.skipIf(isWindows)('writeFile creates parent directories', async () => {
     const { LocalBackend } = await import('../src/sandbox/backends/local.js')
     const backend = new LocalBackend()
     const tempBase = join(tmpdir(), `clashcode-test-${randomBytes(4).toString('hex')}`)
