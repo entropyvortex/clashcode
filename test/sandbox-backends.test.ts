@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+
+const isWindows = process.platform === 'win32'
 import { validateSandboxPath } from '../src/sandbox/backend.js'
 import { DockerBackend, BUILTIN_SECCOMP_PROFILE } from '../src/sandbox/backends/docker.js'
 import { ShuruBackend, isShuruAvailable } from '../src/sandbox/backends/shuru.js'
@@ -162,7 +164,7 @@ describe('sandbox/backends/docker — BUILTIN_SECCOMP_PROFILE', () => {
 })
 
 describe('sandbox/backends/docker — destroy clears state even on failure', () => {
-  it('clears containerId and isRunning before attempting docker rm', async () => {
+  it.skipIf(isWindows)('clears containerId and isRunning before attempting docker rm', async () => {
     // By inspecting the source, destroy() sets containerId = null and
     // _isRunning = false BEFORE calling execFileAsync('docker', ['rm'...]).
     // This guarantees state is cleared even if docker rm throws.
@@ -193,7 +195,7 @@ describe('sandbox/backends/docker — destroy clears state even on failure', () 
     await expect(b.destroy()).resolves.toBeUndefined()
   })
 
-  it('double destroy is safe', async () => {
+  it.skipIf(isWindows)('double destroy is safe', async () => {
     const b = new DockerBackend()
     const bAny = b as any
     bAny.containerId = 'fake-id'

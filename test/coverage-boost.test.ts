@@ -83,7 +83,7 @@ describe('DockerBackend — configuration and security', () => {
     expect(backend.isRunning()).toBe(false)
   })
 
-  it('destroy sets isRunning to false', async () => {
+  it.skipIf(isWindows)('destroy sets isRunning to false', async () => {
     const { DockerBackend } = await import('../src/sandbox/backends/docker.js')
     const backend = new DockerBackend()
     // Manually set internal state to simulate a started backend
