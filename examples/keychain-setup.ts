@@ -9,6 +9,7 @@
  * Run: pnpm tsx examples/keychain-setup.ts
  */
 
+import { randomBytes } from 'node:crypto'
 import { KeychainStore, resolveApiKey } from '../src/index.js'
 
 async function main(): Promise<void> {
@@ -22,7 +23,7 @@ async function main(): Promise<void> {
 
   // Store a test key
   const provider = 'demo-provider'
-  const fakeKey = 'sk-example-' + Math.random().toString(36).slice(2, 10)
+  const fakeKey = 'sk-example-' + randomBytes(6).toString('base64url').slice(0, 8)
   console.log(`Storing key for "${provider}"...`)
   const ok = await chain.set(provider, fakeKey)
   console.log(`  ${ok ? '✓ stored' : '✗ failed'}`)
