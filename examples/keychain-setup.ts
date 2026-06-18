@@ -34,7 +34,7 @@ async function main(): Promise<void> {
 
   // Retrieve via the priority chain (override → keychain → env → settings)
   const resolved = await resolveApiKey(provider, 'EXAMPLE_API_KEY', {})
-  console.log(`\nresolveApiKey() returned: ${resolved?.slice(0, 16)}...`)
+  console.log(`\nresolveApiKey() found key: ${resolved ? 'yes' : 'no'}`)
 
   // Clean up
   await chain.delete(provider)
