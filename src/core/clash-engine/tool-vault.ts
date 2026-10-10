@@ -228,10 +228,15 @@ export function registerBuiltInTools(vault: ToolVault): void {
       execute: async (input) => {
         const target = input.path ?? '.'
         const result = await execShell(
-          `grep -rn "${input.pattern.replace(/"/g, '\\"')}" "${target}" 2>/dev/null | head -50`,
+          `grep -rn -e ${shellQuote(input.pattern)} -- ${shellQuote(target)} 2>/dev/null | head -50`,
         )
         return { data: result.stdout || '(no matches)' }
       },
     }),
   )
+}
+
+/** Quote a value as a single POSIX shell word. */
+function shellQuote(value: string): string {
+  return `'${value.split("'").join("'\\''")}'`
 }

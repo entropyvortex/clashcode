@@ -264,12 +264,23 @@ export function updateSetting(projectRoot: string, key: string, value: unknown):
   let current = obj
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]!
-    if (typeof current[part] !== 'object' || current[part] === null) {
+    if (part === '__proto__' || part === 'constructor' || part === 'prototype') {
+      throw new Error(`Unsafe config key: ${key}`)
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(current, part) ||
+      typeof current[part] !== 'object' ||
+      current[part] === null
+    ) {
       current[part] = {}
     }
     current = current[part] as Record<string, unknown>
   }
-  current[parts[parts.length - 1]!] = value
+  const last = parts[parts.length - 1]!
+  if (last === '__proto__' || last === 'constructor' || last === 'prototype') {
+    throw new Error(`Unsafe config key: ${key}`)
+  }
+  current[last] = value
   saveSettings(projectRoot, settings)
   return settings
 }
