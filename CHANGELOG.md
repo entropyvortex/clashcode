@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0
+
+### Major Changes
+
+- Require zod 4 (security: resolves GHSA alerts for zod < 4.6.6).
+
+  `defineTool()` and `zodToJsonSchema()` now expect zod 4 schemas. zod is a regular dependency at `^4.6.7`.
+
+  Migration:
+  - Build tool schemas with zod 4 (`import { z } from 'zod'` with `zod@^4.6.7` installed).
+  - Schemas created with zod 3 are not recognized: they fail type-checking, and at runtime they are converted to `{ type: 'string' }`.
+  - zod 4 API changes that commonly affect tool schemas: `z.record()` needs an explicit key type (`z.record(z.string(), valueSchema)`), and error messages/codes changed (see the zod 4 migration guide).
+
 ## 1.3.0
 
 ### Breaking Changes
